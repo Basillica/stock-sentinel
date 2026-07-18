@@ -1,0 +1,39 @@
+### Variables
+@baseUrl = http://localhost:8080
+@symbol = AMAT
+
+### Health Check
+GET {{baseUrl}}/health
+
+### Create a Position
+POST {{baseUrl}}/positions
+Content-Type: application/json
+
+{
+  "symbol": "AMAT",
+  "entry_price": 529.66,
+  "quantity": 10
+}
+
+### Get All Positions
+GET {{baseUrl}}/positions
+
+### Get Fast Signal
+# Technical rules only. High frequency polling.
+GET {{baseUrl}}/positions/{{symbol}}/signal
+
+### Get Full Signal
+# Slow: Technical + News + LLM analysis. Poll every 15-30 minutes.
+GET {{baseUrl}}/positions/{{symbol}}/full-signal
+
+### Evaluate Candidates
+# Screen potential buys
+POST {{baseUrl}}/candidates/evaluate
+Content-Type: application/json
+
+{
+  "symbols": ["NVDA", "AMD", "MSFT"]
+}
+
+### Delete a Position
+DELETE {{baseUrl}}/positions/{{symbol}}
