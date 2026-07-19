@@ -4,6 +4,9 @@ use async_trait::async_trait;
 #[async_trait]
 pub trait NewsProvider: Send + Sync {
     async fn headlines(&self, symbol: &str, company_hint: Option<&str>) -> Result<Vec<String>>;
+    /// Arbitrary free-text search, not tied to a ticker - used for macro
+    /// / theme monitoring (e.g. "Germany defense spending NATO").
+    async fn search(&self, query: &str) -> Result<Vec<String>>;
 }
 
 /// Google News RSS needs no API key and no signup, which matters for a
@@ -22,20 +25,12 @@ impl GoogleNewsRssProvider {
             .expect("failed to build HTTPS client - is the rustls-tls feature enabled?");
         Self { client }
     }
-}
 
-#[async_trait]
-impl NewsProvider for GoogleNewsRssProvider {
-    async fn headlines(&self, symbol: &str, company_hint: Option<&str>) -> Result<Vec<String>> {
-        let query = match company_hint {
-            Some(name) => format!("{symbol} {name} stock"),
-            None => format!("{symbol} stock"),
-        };
+    async fn fetch(&self, query: &str) -> Result<Vec<String>> {
         let url = format!(
             "https://news.google.com/rss/search?q={}&hl=en-US&gl=US&ceid=US:en",
-            urlencode(&query)
+            urlencode(query)
         );
-
         let body = self
             .client
             .get(&url)
@@ -46,8 +41,22 @@ impl NewsProvider for GoogleNewsRssProvider {
             .text()
             .await
             .context("failed to read RSS body")?;
-
         Ok(extract_titles(&body))
+    }
+}
+
+#[async_trait]
+impl NewsProvider for GoogleNewsRssProvider {
+    async fn headlines(&self, symbol: &str, company_hint: Option<&str>) -> Result<Vec<String>> {
+        let query = match company_hint {
+            Some(name) => format!("{symbol} {name} stock"),
+            None => format!("{symbol} stock"),
+        };
+        self.fetch(&query).await
+    }
+
+    async fn search(&self, query: &str) -> Result<Vec<String>> {
+        self.fetch(query).await
     }
 }
 

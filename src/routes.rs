@@ -135,13 +135,21 @@ pub async fn evaluate_candidates(
             history.push(q.price);
         }
         let result = state.pipeline.run_candidate(&symbol, &history).await;
-        results.push(result);
+        let tripped = state
+            .circuit_breaker
+            .load(std::sync::atomic::Ordering::SeqCst);
+        results.push(crate::pipeline::apply_circuit_breaker(result, tripped));
     }
     Json(results)
 }
 
 #[derive(Deserialize)]
 pub struct WatchlistRequest {
+    pub symbol: String,
+}
+
+#[derive(Serialize)]
+pub struct WatchlistEntry {
     pub symbol: String,
 }
 
@@ -212,6 +220,242 @@ pub async fn peers(
         .await
         .map(Json)
         .map_err(|_| StatusCode::BAD_GATEWAY)
+}
+
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    pub limit: Option<usize>,
+}
+
+/// Price history for charting / trend-following - whatever's accumulated
+/// in sqlite for this symbol, whether it came from live polling or a
+/// backtest import.
+pub async fn price_history(
+    State(state): State<Arc<AppState>>,
+    Path(symbol): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<HistoryQuery>,
+) -> Result<Json<Vec<f64>>, StatusCode> {
+    state
+        .db
+        .recent_prices(symbol.to_uppercase(), q.limit.unwrap_or(200))
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// Fixed-fractional position sizing - how many shares to buy given your
+/// account size, risk tolerance, and where your stop actually sits.
+pub async fn position_size(
+    Json(req): Json<crate::risk::PositionSizeRequest>,
+) -> Json<crate::risk::PositionSizeResponse> {
+    Json(crate::risk::calculate(&req))
+}
+
+#[derive(Deserialize)]
+pub struct ImportPricesRequest {
+    /// Chronological, oldest first - e.g. pasted daily closes from a CSV.
+    pub prices: Vec<f64>,
+}
+
+pub async fn import_backtest_prices(
+    State(state): State<Arc<AppState>>,
+    Path(symbol): Path<String>,
+    Json(req): Json<ImportPricesRequest>,
+) -> Result<Json<usize>, StatusCode> {
+    state
+        .db
+        .import_price_series(symbol.to_uppercase(), req.prices)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[derive(Deserialize)]
+pub struct BacktestRequest {
+    pub entry_price: f64,
+    pub trailing_stop_pct: Option<f64>,
+    pub take_profit_ladder: Option<Vec<(f64, f64)>>,
+    /// How much stored history to replay - defaults to everything available.
+    pub limit: Option<usize>,
+}
+
+/// Replay the trailing-stop / take-profit rules against whatever price
+/// history is stored for this symbol (live-accumulated or imported via
+/// `import_backtest_prices`) before you trust those thresholds with money.
+pub async fn run_backtest(
+    State(state): State<Arc<AppState>>,
+    Path(symbol): Path<String>,
+    Json(req): Json<BacktestRequest>,
+) -> Result<Json<crate::backtest::BacktestResult>, StatusCode> {
+    let prices = state
+        .db
+        .recent_prices(symbol.to_uppercase(), req.limit.unwrap_or(10_000))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if prices.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let mut cfg = crate::strategy::StrategyConfig::default();
+    if let Some(pct) = req.trailing_stop_pct {
+        cfg.trailing_stop_pct = pct;
+    }
+    if let Some(ladder) = req.take_profit_ladder {
+        cfg.take_profit_ladder = ladder;
+    }
+    Ok(Json(crate::backtest::run(&prices, req.entry_price, &cfg)))
+}
+
+#[derive(Deserialize)]
+pub struct SweepRequest {
+    pub entry_price: f64,
+    pub stop_pcts: Vec<f64>,
+    /// Defaults to [no ladder, a standard 25/25/25 ladder] if omitted.
+    pub ladders: Option<Vec<Vec<(f64, f64)>>>,
+    pub limit: Option<usize>,
+}
+
+pub async fn run_backtest_sweep(
+    State(state): State<Arc<AppState>>,
+    Path(symbol): Path<String>,
+    Json(req): Json<SweepRequest>,
+) -> Result<Json<Vec<crate::backtest::SweepResult>>, StatusCode> {
+    let prices = state
+        .db
+        .recent_prices(symbol.to_uppercase(), req.limit.unwrap_or(10_000))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if prices.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let ladders = req
+        .ladders
+        .unwrap_or_else(|| vec![vec![], vec![(30.0, 0.25), (60.0, 0.25), (100.0, 0.25)]]);
+    Ok(Json(crate::backtest::sweep(
+        &prices,
+        req.entry_price,
+        &req.stop_pcts,
+        &ladders,
+    )))
+}
+
+#[derive(Serialize)]
+pub struct PortfolioStatus {
+    pub current_value: f64,
+    pub peak_value: f64,
+    pub drawdown_pct: f64,
+    pub tripped: bool,
+    pub limit_pct: f64,
+}
+
+pub async fn portfolio_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<PortfolioStatus>, StatusCode> {
+    let drawdown = state
+        .db
+        .portfolio_drawdown()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (current_value, peak_value, drawdown_pct) = drawdown.unwrap_or((0.0, 0.0, 0.0));
+    Ok(Json(PortfolioStatus {
+        current_value,
+        peak_value,
+        drawdown_pct,
+        tripped: state
+            .circuit_breaker
+            .load(std::sync::atomic::Ordering::SeqCst),
+        limit_pct: state.portfolio_drawdown_limit_pct,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct AddThemeRequest {
+    pub name: String,
+    pub keywords: Vec<String>,
+    pub symbols: Vec<String>,
+}
+
+pub async fn add_theme(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AddThemeRequest>,
+) -> Result<StatusCode, StatusCode> {
+    state
+        .db
+        .add_theme(req.name, req.keywords, req.symbols)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::CREATED)
+}
+
+#[derive(Serialize)]
+pub struct ThemeEntry {
+    pub name: String,
+    pub keywords: Vec<String>,
+    pub symbols: Vec<String>,
+}
+
+pub async fn list_themes(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<ThemeEntry>>, StatusCode> {
+    let themes = state
+        .db
+        .list_themes()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(
+        themes
+            .into_iter()
+            .map(|(name, keywords, symbols)| ThemeEntry {
+                name,
+                keywords,
+                symbols,
+            })
+            .collect(),
+    ))
+}
+
+pub async fn remove_theme(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> StatusCode {
+    match state.db.remove_theme(name).await {
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+#[derive(Serialize)]
+pub struct ThemeEventEntry {
+    pub summary: String,
+    pub relevance: f64,
+    pub symbols: Vec<String>,
+    pub recorded_at: String,
+}
+
+pub async fn theme_history(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<Json<Vec<ThemeEventEntry>>, StatusCode> {
+    let rows = state
+        .db
+        .recent_theme_events(name, 50)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(
+        rows.into_iter()
+            .map(
+                |(summary, relevance, symbols_csv, recorded_at)| ThemeEventEntry {
+                    summary,
+                    relevance,
+                    symbols: symbols_csv
+                        .split(',')
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect(),
+                    recorded_at,
+                },
+            )
+            .collect(),
+    ))
 }
 
 #[derive(Serialize)]

@@ -1,11 +1,12 @@
-use crate::pipeline::Verdict;
+use crate::pipeline::{apply_circuit_breaker, Verdict};
 use crate::portfolio::Position;
 use crate::state::AppState;
 use crate::strategy::StrategyConfig;
 use anyhow::Result;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
 
 pub struct ScannerConfig {
@@ -40,15 +41,22 @@ pub async fn run_scanner_loop(state: Arc<AppState>, cfg: ScannerConfig) {
         ticker.tick().await;
         let started = std::time::Instant::now();
         match scan_once(&state, cfg.max_concurrent_scans).await {
-            Ok(count) => tracing::info!("scan cycle done: {count} tickers in {:?}", started.elapsed()),
+            Ok(count) => tracing::info!(
+                "scan cycle done: {count} tickers in {:?}",
+                started.elapsed()
+            ),
             Err(e) => tracing::error!("scan cycle failed: {e:?}"),
+        }
+        if let Err(e) = scan_themes(&state).await {
+            tracing::error!("theme scan failed: {e:?}");
         }
     }
 }
 
-/// One full pass over every position and every watchlist symbol, fanned
-/// out concurrently and capped by a semaphore. Returns how many tickers
-/// were scanned.
+/// One full pass: positions first (their aggregate value feeds the
+/// portfolio circuit breaker), then watchlist candidates (which respect
+/// whatever the breaker just decided). Returns how many tickers were
+/// scanned in total.
 pub async fn scan_once(state: &Arc<AppState>, max_concurrent: usize) -> Result<usize> {
     // Dynamic list, read fresh every cycle:
     //   - held positions come from the live in-memory cache (source of truth
@@ -60,28 +68,43 @@ pub async fn scan_once(state: &Arc<AppState>, max_concurrent: usize) -> Result<u
     let total = position_symbols.len() + watchlist_symbols.len();
 
     let scan_semaphore = Arc::new(Semaphore::new(max_concurrent.max(1)));
-    let mut tasks: JoinSet<()> = JoinSet::new();
 
+    // --- Phase 1: positions. Also accumulates total market value for the
+    // portfolio-level circuit breaker below. ---
+    let portfolio_value = Arc::new(Mutex::new(0.0_f64));
+    let mut position_tasks: JoinSet<()> = JoinSet::new();
     for symbol in position_symbols {
         let state = Arc::clone(state);
         let sem = Arc::clone(&scan_semaphore);
-        tasks.spawn(async move {
-            // Held for the whole task, released on drop when the task ends -
-            // this is what actually bounds concurrency, not the spawn itself.
+        let portfolio_value = Arc::clone(&portfolio_value);
+        position_tasks.spawn(async move {
             let _permit = match sem.acquire_owned().await {
                 Ok(p) => p,
                 Err(_) => return,
             };
-            if let Err(e) = scan_position(&state, &symbol).await {
-                tracing::warn!(symbol, "position scan failed: {e:?}");
+            match scan_position(&state, &symbol).await {
+                Ok(market_value) => {
+                    *portfolio_value.lock().await += market_value;
+                }
+                Err(e) => tracing::warn!(symbol, "position scan failed: {e:?}"),
             }
         });
     }
+    while let Some(res) = position_tasks.join_next().await {
+        if let Err(e) = res {
+            tracing::error!("position scan task panicked: {e:?}");
+        }
+    }
 
+    update_circuit_breaker(state, *portfolio_value.lock().await).await;
+
+    // --- Phase 2: watchlist candidates, gated by whatever the breaker
+    // decided in phase 1. ---
+    let mut candidate_tasks: JoinSet<()> = JoinSet::new();
     for symbol in watchlist_symbols {
         let state = Arc::clone(state);
         let sem = Arc::clone(&scan_semaphore);
-        tasks.spawn(async move {
+        candidate_tasks.spawn(async move {
             let _permit = match sem.acquire_owned().await {
                 Ok(p) => p,
                 Err(_) => return,
@@ -91,24 +114,73 @@ pub async fn scan_once(state: &Arc<AppState>, max_concurrent: usize) -> Result<u
             }
         });
     }
-
-    // Drain results as they finish (not in spawn order) so one slow ticker
-    // (e.g. a name with unusually chatty news coverage) never blocks the
-    // whole cycle from reporting the tickers that finished early. A panic
-    // inside one task surfaces here as an `Err` instead of taking down the
-    // whole scanner.
-    while let Some(res) = tasks.join_next().await {
+    while let Some(res) = candidate_tasks.join_next().await {
         if let Err(e) = res {
-            tracing::error!("scan task panicked: {e:?}");
+            tracing::error!("candidate scan task panicked: {e:?}");
         }
     }
 
     Ok(total)
 }
 
-async fn scan_position(state: &Arc<AppState>, symbol: &str) -> Result<()> {
+/// Records this cycle's total position value, recomputes drawdown from
+/// the all-time peak, and flips the circuit breaker if the configured
+/// limit is breached - alerting once on each transition, not every
+/// cycle, so it doesn't spam.
+async fn update_circuit_breaker(state: &Arc<AppState>, total_value: f64) {
+    if total_value <= 0.0 {
+        return; // no positions held - nothing to track yet
+    }
+    if let Err(e) = state.db.record_portfolio_equity(total_value).await {
+        tracing::warn!("failed to record portfolio equity: {e:?}");
+        return;
+    }
+    let drawdown = match state.db.portfolio_drawdown().await {
+        Ok(Some(d)) => d,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!("failed to compute portfolio drawdown: {e:?}");
+            return;
+        }
+    };
+    let (current, peak, drawdown_pct) = drawdown;
+    let should_trip = drawdown_pct <= -state.portfolio_drawdown_limit_pct;
+    let was_tripped = state.circuit_breaker.swap(should_trip, Ordering::SeqCst);
+
+    if should_trip && !was_tripped {
+        tracing::warn!(
+            "PORTFOLIO CIRCUIT BREAKER TRIPPED: {:.1}% drawdown (current {:.2}, peak {:.2}) - new buys suppressed",
+            drawdown_pct, current, peak
+        );
+        if let Some(notifier) = &state.notifier {
+            let text = format!(
+                "🛑 *Portfolio circuit breaker tripped*\n{:.1}% drawdown from peak ({:.2} vs peak {:.2}). New candidate buys are suppressed until this recovers.",
+                drawdown_pct, current, peak
+            );
+            let _ = notifier.send(&text).await;
+        }
+    } else if !should_trip && was_tripped {
+        tracing::info!(
+            "portfolio circuit breaker cleared - drawdown now {:.1}%",
+            drawdown_pct
+        );
+        if let Some(notifier) = &state.notifier {
+            let text = format!(
+                "✅ *Portfolio circuit breaker cleared* - drawdown now {drawdown_pct:.1}%."
+            );
+            let _ = notifier.send(&text).await;
+        }
+    }
+}
+
+/// Returns this position's current market value (quantity * price) so
+/// the caller can fold it into the portfolio-level total.
+async fn scan_position(state: &Arc<AppState>, symbol: &str) -> Result<f64> {
     let quote = state.provider.quote(symbol).await?;
-    state.db.record_price(symbol.to_string(), quote.price).await?;
+    state
+        .db
+        .record_price(symbol.to_string(), quote.price)
+        .await?;
 
     // Update the in-memory position, then release the lock before the
     // (slow, network-bound) pipeline call - DashMap guards are not meant
@@ -116,35 +188,51 @@ async fn scan_position(state: &Arc<AppState>, symbol: &str) -> Result<()> {
     let snapshot: Position = {
         let mut entry = match state.positions.get_mut(symbol) {
             Some(e) => e,
-            None => return Ok(()), // removed between listing and now - fine, skip
+            None => return Ok(0.0), // removed between listing and now - fine, skip
         };
         entry.record_price(quote.price);
         entry.clone()
     };
 
     state.db.upsert_position(snapshot.clone()).await?;
+    let market_value = snapshot.quantity * quote.price;
 
     let cfg = StrategyConfig::default();
-    let result = state.pipeline.run_position(&snapshot, quote.price, &cfg).await;
+    let result = state
+        .pipeline
+        .run_position(&snapshot, quote.price, &cfg)
+        .await;
     state.db.log_evaluation(&result).await?;
 
     match &result.verdict {
         Verdict::SellAll { reason } => tracing::warn!(symbol, "ACTION sell_all: {reason}"),
         Verdict::TrimProfit { fraction, reason } => {
-            tracing::warn!(symbol, "ACTION trim_profit ({:.0}%): {reason}", fraction * 100.0)
+            tracing::warn!(
+                symbol,
+                "ACTION trim_profit ({:.0}%): {reason}",
+                fraction * 100.0
+            )
         }
         Verdict::Watch { .. } => tracing::info!(symbol, "watch: news risk flag raised"),
         _ => {}
     }
-    // TODO: this is the hook point for a real notifier - Telegram, ntfy.sh,
-    // email - once you're ready to stop tailing logs for alerts.
+    if let Some(notifier) = &state.notifier {
+        if let Some(text) = crate::telegram::format_alert(symbol, &result.verdict) {
+            if let Err(e) = notifier.send(&text).await {
+                tracing::warn!(symbol, "failed to send Telegram alert: {e:?}");
+            }
+        }
+    }
 
-    Ok(())
+    Ok(market_value)
 }
 
 async fn scan_candidate(state: &Arc<AppState>, symbol: &str) -> Result<()> {
     let quote = state.provider.quote(symbol).await?;
-    state.db.record_price(symbol.to_string(), quote.price).await?;
+    state
+        .db
+        .record_price(symbol.to_string(), quote.price)
+        .await?;
 
     let mut history = state.db.recent_prices(symbol.to_string(), 60).await?;
     if history.last().copied() != Some(quote.price) {
@@ -152,11 +240,80 @@ async fn scan_candidate(state: &Arc<AppState>, symbol: &str) -> Result<()> {
     }
 
     let result = state.pipeline.run_candidate(symbol, &history).await;
+    let tripped = state.circuit_breaker.load(Ordering::SeqCst);
+    let result = apply_circuit_breaker(result, tripped);
     state.db.log_evaluation(&result).await?;
 
     if let Verdict::Buy { confidence } = &result.verdict {
         tracing::info!(symbol, "candidate BUY signal, confidence {confidence:.2}");
     }
+    if let Some(notifier) = &state.notifier {
+        if let Some(text) = crate::telegram::format_alert(symbol, &result.verdict) {
+            if let Err(e) = notifier.send(&text).await {
+                tracing::warn!(symbol, "failed to send Telegram alert: {e:?}");
+            }
+        }
+    }
 
+    Ok(())
+}
+
+/// Checks every tracked macro theme (Rheinmetal-style "something big is
+/// happening in the world" monitoring) and logs + alerts on genuinely
+/// relevant findings. Sequential rather than parallel - themes are
+/// expected to be few, and each one already does several news searches
+/// internally, so there's no strong case for adding another concurrency
+/// dimension here.
+async fn scan_themes(state: &Arc<AppState>) -> Result<()> {
+    let themes = state.db.list_themes().await?;
+    for (name, keywords, symbols) in themes {
+        let theme = crate::themes::Theme {
+            name: name.clone(),
+            keywords,
+            symbols,
+        };
+        let analysis = match state.theme_watcher.check(&theme).await {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!(theme = %name, "theme check failed: {e:?}");
+                continue;
+            }
+        };
+
+        state
+            .db
+            .log_theme_event(
+                name.clone(),
+                analysis.summary.clone(),
+                analysis.relevance,
+                analysis.affected_symbols.clone(),
+            )
+            .await?;
+
+        // Conservative threshold - most cycles should NOT alert. This is
+        // explicitly tuned to only surface things the model itself rates
+        // as a genuinely major, durable shift.
+        if analysis.relevance >= 0.6 {
+            tracing::warn!(
+                theme = %name,
+                "THEME ALERT (relevance {:.2}): {}",
+                analysis.relevance, analysis.summary
+            );
+            if let Some(notifier) = &state.notifier {
+                let symbols_str = if analysis.affected_symbols.is_empty() {
+                    "none flagged".to_string()
+                } else {
+                    analysis.affected_symbols.join(", ")
+                };
+                let text = format!(
+                    "🌍 *Theme alert: {name}* (relevance {:.2})\n{}\nConsider researching: {symbols_str}",
+                    analysis.relevance, analysis.summary
+                );
+                if let Err(e) = notifier.send(&text).await {
+                    tracing::warn!(theme = %name, "failed to send theme Telegram alert: {e:?}");
+                }
+            }
+        }
+    }
     Ok(())
 }

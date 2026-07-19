@@ -1,5 +1,5 @@
 use crate::finnhub_extra::FinnhubExtras;
-use crate::indicators::{rsi, sma};
+use crate::indicators::{bollinger_bands, macd, rsi, sma};
 use crate::news::NewsProvider;
 use crate::ollama::{NewsAnalysis, OllamaClient};
 use crate::portfolio::Position;
@@ -76,13 +76,13 @@ impl Pipeline {
     pub fn new(
         news: Arc<dyn NewsProvider>,
         llm: Arc<OllamaClient>,
-        llm_concurrency: usize,
+        llm_semaphore: Arc<Semaphore>,
         extras: Option<Arc<FinnhubExtras>>,
     ) -> Self {
         Self {
             news,
             llm,
-            llm_semaphore: Arc::new(Semaphore::new(llm_concurrency.max(1))),
+            llm_semaphore,
             extras,
         }
     }
@@ -291,6 +291,55 @@ impl Pipeline {
             });
         }
 
+        if let Some((macd_line, signal_line, hist)) = macd(price_history, 12, 26, 9) {
+            let w = if hist > 0.0 { 0.15 } else { -0.15 };
+            score += w;
+            trace.push(Evidence {
+                source: "technical".into(),
+                label: "MACD".into(),
+                detail: format!(
+                    "MACD {:.2} vs signal {:.2} ({})",
+                    macd_line,
+                    signal_line,
+                    if hist > 0.0 {
+                        "bullish crossover"
+                    } else {
+                        "bearish crossover"
+                    }
+                ),
+                weight: w,
+            });
+        }
+
+        if let (Some((lower, _mid, upper)), Some(&last)) = (
+            bollinger_bands(price_history, 20, 2.0),
+            price_history.last(),
+        ) {
+            let (w, label) = if last > upper {
+                (-0.1, "above upper band - stretched, caution")
+            } else if last < lower {
+                (0.1, "below lower band - potentially oversold")
+            } else {
+                (0.0, "within bands")
+            };
+            score += w;
+            trace.push(Evidence {
+                source: "technical".into(),
+                label: "Bollinger Bands".into(),
+                detail: format!("price {last:.2} vs band [{lower:.2}, {upper:.2}] - {label}"),
+                weight: w,
+            });
+        }
+
+        if let Some(dd) = crate::indicators::drawdown_from_peak(price_history) {
+            trace.push(Evidence {
+                source: "technical".into(),
+                label: "drawdown from recent peak".into(),
+                detail: format!("{dd:.1}% off the peak of the tracked history window"),
+                weight: 0.0, // informational only - RSI/trend/MACD already cover direction
+            });
+        }
+
         let headlines = self.gather_headlines(symbol).await;
         if let Ok(news) = self.analyze(symbol, &headlines).await {
             let w = news.sentiment * news.confidence * 0.5; // weighted less than price trend
@@ -330,6 +379,28 @@ impl Pipeline {
     }
 }
 
+/// Portfolio-level override: if the aggregate drawdown circuit breaker is
+/// tripped, no new Buy verdict should go out, regardless of how good an
+/// individual candidate looks. This is intentionally separate from - and
+/// applied *after* - the per-symbol pipeline, because "should I buy
+/// anything right now" is a portfolio-level question the single-symbol
+/// pipeline has no visibility into. Pure and unit-tested so the override
+/// logic itself is verifiable, not just trusted.
+pub fn apply_circuit_breaker(mut result: PipelineResult, tripped: bool) -> PipelineResult {
+    if tripped {
+        if let Verdict::Buy { confidence } = result.verdict {
+            result.trace.push(Evidence {
+                source: "portfolio".into(),
+                label: "circuit breaker".into(),
+                detail: "Portfolio drawdown circuit breaker is tripped - new buys are suppressed until it clears.".into(),
+                weight: -1.0,
+            });
+            result.verdict = Verdict::Avoid { confidence };
+        }
+    }
+    result
+}
+
 fn news_evidence(n: &NewsAnalysis) -> Evidence {
     Evidence {
         source: "news+llm".into(),
@@ -340,5 +411,46 @@ fn news_evidence(n: &NewsAnalysis) -> Evidence {
             n.key_points.join("; ")
         },
         weight: n.sentiment * n.confidence,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn circuit_breaker_downgrades_buy_to_avoid_when_tripped() {
+        let result = PipelineResult {
+            symbol: "NVDA".into(),
+            trace: vec![],
+            verdict: Verdict::Buy { confidence: 0.8 },
+        };
+        let gated = apply_circuit_breaker(result, true);
+        assert!(matches!(gated.verdict, Verdict::Avoid { .. }));
+        assert!(gated.trace.iter().any(|e| e.label == "circuit breaker"));
+    }
+
+    #[test]
+    fn circuit_breaker_leaves_buy_alone_when_not_tripped() {
+        let result = PipelineResult {
+            symbol: "NVDA".into(),
+            trace: vec![],
+            verdict: Verdict::Buy { confidence: 0.8 },
+        };
+        let gated = apply_circuit_breaker(result, false);
+        assert!(matches!(gated.verdict, Verdict::Buy { .. }));
+    }
+
+    #[test]
+    fn circuit_breaker_does_not_touch_non_buy_verdicts() {
+        let result = PipelineResult {
+            symbol: "AMAT".into(),
+            trace: vec![],
+            verdict: Verdict::SellAll {
+                reason: "stop".into(),
+            },
+        };
+        let gated = apply_circuit_breaker(result, true);
+        assert!(matches!(gated.verdict, Verdict::SellAll { .. }));
     }
 }

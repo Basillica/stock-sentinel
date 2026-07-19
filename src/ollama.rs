@@ -19,6 +19,27 @@ pub struct NewsAnalysis {
     pub risk_flags: Vec<String>,
 }
 
+/// Macro/geopolitical theme analysis - deliberately a different shape and
+/// prompt from `NewsAnalysis`. This is NOT a buy signal generator: it
+/// summarizes what's happening and flags it for you to go research,
+/// exactly like the risk_flags path in company news does. Catching a
+/// move like Rheinmetal's after Germany's defense spending announcement
+/// *before* it's obvious requires reading between headlines that a
+/// simple sentiment score can't capture - so this asks the model to
+/// reason about magnitude and durability, not just polarity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeAnalysis {
+    /// 0.0 (nothing new here) .. 1.0 (a genuinely major, durable shift).
+    /// Deliberately conservative by design - most news cycles about any
+    /// given theme are noise, not a Rheinmetal-style inflection point.
+    pub relevance: f64,
+    pub summary: String,
+    /// Which of the theme's tracked symbols this news plausibly affects,
+    /// and why - always framed as "go research this", never "buy this".
+    pub affected_symbols: Vec<String>,
+    pub reasoning: String,
+}
+
 pub struct OllamaClient {
     base_url: String,
     model: String,
@@ -32,6 +53,30 @@ impl OllamaClient {
             model,
             client: reqwest::Client::new(),
         }
+    }
+
+    async fn generate_json<T: for<'de> Deserialize<'de>>(&self, prompt: String) -> Result<T> {
+        let body = serde_json::json!({
+            "model": self.model,
+            "prompt": prompt,
+            "stream": false,
+            "format": "json",
+            "options": { "temperature": 0.1 }
+        });
+
+        let resp: OllamaGenerateResponse = self
+            .client
+            .post(format!("{}/api/generate", self.base_url))
+            .json(&body)
+            .send()
+            .await
+            .context("failed to reach local Ollama - is `ollama serve` running?")?
+            .json()
+            .await
+            .context("Ollama response wasn't the expected shape")?;
+
+        serde_json::from_str(resp.response.trim())
+            .context("model did not return valid JSON for the requested schema")
     }
 
     /// Ask the local model to read a batch of headlines for one symbol and
@@ -73,29 +118,55 @@ impl OllamaClient {
              Leave it empty for ordinary news."
         );
 
-        let body = serde_json::json!({
-            "model": self.model,
-            "prompt": prompt,
-            "stream": false,
-            "format": "json",
-            "options": { "temperature": 0.1 }
-        });
+        self.generate_json(prompt).await
+    }
 
-        let resp: OllamaGenerateResponse = self
-            .client
-            .post(format!("{}/api/generate", self.base_url))
-            .json(&body)
-            .send()
-            .await
-            .context("failed to reach local Ollama - is `ollama serve` running?")?
-            .json()
-            .await
-            .context("Ollama response wasn't the expected shape")?;
+    /// Ask the local model to assess whether a batch of headlines about a
+    /// macro/geopolitical theme represents a durable, meaningfully
+    /// impactful shift - or just routine news volume.
+    pub async fn analyze_theme(
+        &self,
+        theme_name: &str,
+        tracked_symbols: &[String],
+        headlines: &[String],
+    ) -> Result<ThemeAnalysis> {
+        if headlines.is_empty() {
+            return Ok(ThemeAnalysis {
+                relevance: 0.0,
+                summary: "No headlines found for this theme in the current window.".into(),
+                affected_symbols: vec![],
+                reasoning: String::new(),
+            });
+        }
 
-        let parsed: NewsAnalysis = serde_json::from_str(resp.response.trim())
-            .context("model did not return valid JSON for the requested schema")?;
+        let joined = headlines
+            .iter()
+            .take(20)
+            .enumerate()
+            .map(|(i, h)| format!("{}. {}", i + 1, h))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let symbols_list = tracked_symbols.join(", ");
 
-        Ok(parsed)
+        let prompt = format!(
+            "You are a macro/geopolitical news analyst helping an investor decide whether \
+             something happening in the world is worth researching further for a specific \
+             theme they're tracking. You are NOT giving investment advice or predicting \
+             prices - you are flagging whether this looks like a genuinely major, durable \
+             shift (like a government announcing a large sustained policy change) versus \
+             routine news noise.\n\n\
+             Theme: {theme_name}\n\
+             Symbols the investor is tracking for this theme: {symbols_list}\n\
+             Recent headlines:\n{joined}\n\n\
+             Respond with ONLY a JSON object, no other text, no markdown fences, matching \
+             exactly this shape:\n\
+             {{\"relevance\": <float 0.0 to 1.0, be conservative - most news is not a major \
+             inflection point>, \"summary\": <one or two sentence plain-language summary>, \
+             \"affected_symbols\": [<subset of the tracked symbols this plausibly affects>], \
+             \"reasoning\": <brief note on why this is or isn't durable/significant>}}"
+        );
+
+        self.generate_json(prompt).await
     }
 }
 

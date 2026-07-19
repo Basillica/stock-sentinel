@@ -1,5 +1,6 @@
 ### Variables
-@baseUrl = http://localhost:8080
+@baseUrl = https://stock-sentinel-9wq1.onrender.com 
+## http://localhost:8080
 @symbol = AMAT
 
 ### Health Check

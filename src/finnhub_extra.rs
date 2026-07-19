@@ -1,6 +1,8 @@
+use crate::ratelimit::RateLimiter;
 use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Extra Finnhub endpoints beyond /quote. Kept separate from
 /// `MarketDataProvider` because these are Finnhub-specific (no equivalent
@@ -12,19 +14,28 @@ use serde::{Deserialize, Serialize};
 pub struct FinnhubExtras {
     api_key: String,
     client: reqwest::Client,
+    rate_limiter: Arc<RateLimiter>,
 }
 
 impl FinnhubExtras {
-    pub fn new(api_key: String) -> Self {
+    pub fn new(api_key: String, rate_limiter: Arc<RateLimiter>) -> Self {
         let client = reqwest::Client::builder()
             .use_rustls_tls()
+            .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("failed to build HTTPS client - is the rustls-tls feature enabled?");
-        Self { api_key, client }
+        Self {
+            api_key,
+            client,
+            rate_limiter,
+        }
     }
 
     fn url(&self, path: &str, query: &str) -> String {
-        format!("https://finnhub.io/api/v1{path}?{query}&token={}", self.api_key)
+        format!(
+            "https://finnhub.io/api/v1{path}?{query}&token={}",
+            self.api_key
+        )
     }
 
     /// GET /company-news - free tier gets 1 year of history. Structured
@@ -32,6 +43,7 @@ impl FinnhubExtras {
     /// the RSS scraper whenever a Finnhub key is configured: no dedup
     /// guesswork, and we can bound the window precisely.
     pub async fn company_news(&self, symbol: &str, days_back: i64) -> Result<Vec<CompanyNewsItem>> {
+        self.rate_limiter.acquire().await;
         let to = Utc::now().date_naive();
         let from = to - Duration::days(days_back);
         let url = self.url(
@@ -53,6 +65,7 @@ impl FinnhubExtras {
     /// GET /stock/metric?metric=all - no premium flag in the swagger, but
     /// marked highUsage; treat failures as "unavailable" rather than fatal.
     pub async fn basic_financials(&self, symbol: &str) -> Result<BasicFinancials> {
+        self.rate_limiter.acquire().await;
         let url = self.url("/stock/metric", &format!("symbol={symbol}&metric=all"));
         let resp: BasicFinancialsResponse = self
             .client
@@ -68,7 +81,12 @@ impl FinnhubExtras {
 
     /// GET /calendar/earnings?symbol=X - free tier gets 1 month forward.
     /// Returns the next upcoming release if one falls within `days_ahead`.
-    pub async fn next_earnings(&self, symbol: &str, days_ahead: i64) -> Result<Option<EarningsEvent>> {
+    pub async fn next_earnings(
+        &self,
+        symbol: &str,
+        days_ahead: i64,
+    ) -> Result<Option<EarningsEvent>> {
+        self.rate_limiter.acquire().await;
         let from = Utc::now().date_naive();
         let to = from + Duration::days(days_ahead);
         let url = self.url(
@@ -90,6 +108,7 @@ impl FinnhubExtras {
     /// GET /stock/recommendation - no premium flag; latest period's
     /// analyst buy/hold/sell counts.
     pub async fn recommendation_trend(&self, symbol: &str) -> Result<Option<RecommendationTrend>> {
+        self.rate_limiter.acquire().await;
         let url = self.url("/stock/recommendation", &format!("symbol={symbol}"));
         let resp: Vec<RecommendationTrend> = self
             .client
@@ -106,6 +125,7 @@ impl FinnhubExtras {
     /// GET /stock/peers - no premium flag; useful for building a watchlist
     /// starting from one ticker you already know.
     pub async fn peers(&self, symbol: &str) -> Result<Vec<String>> {
+        self.rate_limiter.acquire().await;
         let url = self.url("/stock/peers", &format!("symbol={symbol}"));
         let resp: Vec<String> = self
             .client
@@ -176,8 +196,8 @@ impl RecommendationTrend {
         if total == 0 {
             return None;
         }
-        let weighted = (2 * self.strong_buy + self.buy) as f64
-            - (2 * self.strong_sell + self.sell) as f64;
+        let weighted =
+            (2 * self.strong_buy + self.buy) as f64 - (2 * self.strong_sell + self.sell) as f64;
         Some((weighted / (2 * total) as f64).clamp(-1.0, 1.0))
     }
 }

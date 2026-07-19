@@ -1,0 +1,36 @@
+services:
+  stock-sentinel:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - FINNHUB_API_KEY=${FINNHUB_API_KEY:-}
+      - FINNHUB_RATE_LIMIT_PER_MIN=${FINNHUB_RATE_LIMIT_PER_MIN:-55}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
+      - LLM_CONCURRENCY=${LLM_CONCURRENCY:-2}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - API_AUTH_TOKEN=${API_AUTH_TOKEN:?set API_AUTH_TOKEN in your .env before deploying}
+      - SCAN_INTERVAL_SECS=${SCAN_INTERVAL_SECS:-900}
+      - MAX_CONCURRENT_SCANS=${MAX_CONCURRENT_SCANS:-8}
+      - MAX_PORTFOLIO_DRAWDOWN_PCT=${MAX_PORTFOLIO_DRAWDOWN_PCT:-15}
+      - RUST_LOG=${RUST_LOG:-stock_sentinel=info,tower_http=info}
+    volumes:
+      - sentinel-data:/data
+    depends_on:
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    # No ports exposed to the host on purpose - only stock-sentinel needs
+    # to reach it, over the internal compose network.
+
+volumes:
+  sentinel-data:
+  ollama-models:

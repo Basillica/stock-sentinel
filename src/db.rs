@@ -2,7 +2,7 @@ use crate::pipeline::PipelineResult;
 use crate::portfolio::Position;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::sync::{Arc, Mutex};
 
 /// rusqlite::Connection is not Send-across-await-friendly to hold inside an
@@ -49,6 +49,29 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_eval_log_symbol
                 ON evaluation_log(symbol, recorded_at);
+            CREATE TABLE IF NOT EXISTS portfolio_equity (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                total_value REAL NOT NULL,
+                recorded_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_portfolio_equity_time
+                ON portfolio_equity(recorded_at);
+            CREATE TABLE IF NOT EXISTS themes (
+                name        TEXT PRIMARY KEY,
+                keywords    TEXT NOT NULL,
+                symbols     TEXT NOT NULL,
+                added_at    TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS theme_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                theme       TEXT NOT NULL,
+                summary     TEXT NOT NULL,
+                relevance   REAL NOT NULL,
+                symbols     TEXT NOT NULL,
+                recorded_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_theme_log_theme
+                ON theme_log(theme, recorded_at);
             ",
         )
         .context("failed to run schema migration")?;
@@ -170,6 +193,29 @@ impl Db {
         .await
     }
 
+    /// Bulk-insert a chronological price series (oldest first) for
+    /// backtesting - e.g. pasted from a downloaded CSV. Spaces synthetic
+    /// timestamps one day apart ending now, purely so `recent_prices`'
+    /// ORDER BY recorded_at keeps them in the order they were given.
+    pub async fn import_price_series(&self, symbol: String, prices: Vec<f64>) -> Result<usize> {
+        let count = prices.len();
+        self.run(move |conn| {
+            let now = Utc::now();
+            let tx = conn.unchecked_transaction()?;
+            for (i, price) in prices.iter().enumerate() {
+                let ts = now - chrono::Duration::days((prices.len() - i) as i64);
+                tx.execute(
+                    "INSERT INTO price_history (symbol, price, recorded_at) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![symbol, price, ts.to_rfc3339()],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        Ok(count)
+    }
+
     pub async fn record_price(&self, symbol: String, price: f64) -> Result<()> {
         self.run(move |conn| {
             conn.execute(
@@ -221,7 +267,11 @@ impl Db {
         .await
     }
 
-    pub async fn recent_evaluations(&self, symbol: String, limit: usize) -> Result<Vec<(String, String, String)>> {
+    pub async fn recent_evaluations(
+        &self,
+        symbol: String,
+        limit: usize,
+    ) -> Result<Vec<(String, String, String)>> {
         // (verdict, trace_json, recorded_at), newest first
         self.run(move |conn| {
             let mut stmt = conn.prepare(
@@ -229,7 +279,162 @@ impl Db {
                  WHERE symbol = ?1 ORDER BY recorded_at DESC LIMIT ?2",
             )?;
             let rows = stmt.query_map(rusqlite::params![symbol, limit as i64], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    // --- Portfolio-level equity / circuit breaker ---
+
+    pub async fn record_portfolio_equity(&self, total_value: f64) -> Result<()> {
+        self.run(move |conn| {
+            conn.execute(
+                "INSERT INTO portfolio_equity (total_value, recorded_at) VALUES (?1, ?2)",
+                rusqlite::params![total_value, Utc::now().to_rfc3339()],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// (current_value, peak_value_ever_recorded, drawdown_pct). `None` if
+    /// no equity has been recorded yet (e.g. server just started, no
+    /// positions held).
+    pub async fn portfolio_drawdown(&self) -> Result<Option<(f64, f64, f64)>> {
+        self.run(|conn| {
+            let current: Option<f64> = conn
+                .query_row(
+                    "SELECT total_value FROM portfolio_equity ORDER BY recorded_at DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(current) = current else {
+                return Ok(None);
+            };
+            let peak: f64 =
+                conn.query_row("SELECT MAX(total_value) FROM portfolio_equity", [], |row| {
+                    row.get(0)
+                })?;
+            let drawdown_pct = if peak > 0.0 {
+                (current - peak) / peak * 100.0
+            } else {
+                0.0
+            };
+            Ok(Some((current, peak, drawdown_pct)))
+        })
+        .await
+    }
+
+    // --- Theme watch (macro / geopolitical monitoring) ---
+
+    pub async fn add_theme(
+        &self,
+        name: String,
+        keywords: Vec<String>,
+        symbols: Vec<String>,
+    ) -> Result<()> {
+        self.run(move |conn| {
+            conn.execute(
+                "INSERT INTO themes (name, keywords, symbols, added_at) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(name) DO UPDATE SET keywords = excluded.keywords, symbols = excluded.symbols",
+                rusqlite::params![
+                    name,
+                    keywords.join(","),
+                    symbols.join(","),
+                    Utc::now().to_rfc3339()
+                ],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn remove_theme(&self, name: String) -> Result<()> {
+        self.run(move |conn| {
+            conn.execute("DELETE FROM themes WHERE name = ?1", [name])?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// (name, keywords, symbols) for every tracked theme.
+    pub async fn list_themes(&self) -> Result<Vec<(String, Vec<String>, Vec<String>)>> {
+        self.run(|conn| {
+            let mut stmt = conn.prepare("SELECT name, keywords, symbols FROM themes")?;
+            let rows = stmt.query_map([], |row| {
+                let name: String = row.get(0)?;
+                let keywords: String = row.get(1)?;
+                let symbols: String = row.get(2)?;
+                Ok((name, keywords, symbols))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (name, keywords, symbols) = row?;
+                out.push((
+                    name,
+                    keywords
+                        .split(',')
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect(),
+                    symbols
+                        .split(',')
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect(),
+                ));
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    pub async fn log_theme_event(
+        &self,
+        theme: String,
+        summary: String,
+        relevance: f64,
+        symbols: Vec<String>,
+    ) -> Result<()> {
+        self.run(move |conn| {
+            conn.execute(
+                "INSERT INTO theme_log (theme, summary, relevance, symbols, recorded_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![theme, summary, relevance, symbols.join(","), Utc::now().to_rfc3339()],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn recent_theme_events(
+        &self,
+        theme: String,
+        limit: usize,
+    ) -> Result<Vec<(String, f64, String, String)>> {
+        // (summary, relevance, symbols_csv, recorded_at), newest first
+        self.run(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT summary, relevance, symbols, recorded_at FROM theme_log
+                 WHERE theme = ?1 ORDER BY recorded_at DESC LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![theme, limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
             })?;
             let mut out = Vec::new();
             for row in rows {
