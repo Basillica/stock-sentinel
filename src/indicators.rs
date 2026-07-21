@@ -107,6 +107,28 @@ pub fn atr_from_closes(values: &[f64], period: usize) -> Option<f64> {
     Some(ranges.iter().sum::<f64>() / ranges.len() as f64)
 }
 
+/// The real thing: Average True Range from actual high/low/close bars
+/// (all three slices must be the same length, oldest first). True range
+/// accounts for gaps between one day's close and the next day's high/low,
+/// which `atr_from_closes` above can't see - this is what you want
+/// feeding an ATR-scaled stop once you have real OHLC data (see
+/// `src/twelvedata.rs` / `POST /backfill/:symbol`).
+pub fn atr(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Option<f64> {
+    if highs.len() != lows.len() || highs.len() != closes.len() || highs.len() < period + 1 {
+        return None;
+    }
+    let n = highs.len();
+    let mut true_ranges = Vec::with_capacity(period);
+    for i in (n - period)..n {
+        let prev_close = closes[i - 1];
+        let tr = (highs[i] - lows[i])
+            .max((highs[i] - prev_close).abs())
+            .max((lows[i] - prev_close).abs());
+        true_ranges.push(tr);
+    }
+    Some(true_ranges.iter().sum::<f64>() / period as f64)
+}
+
 /// Percentage drawdown from the running peak of the series.
 /// This is the number that would have told you "you're down 20% from
 /// the high" on the Applied Materials trade.
@@ -171,5 +193,27 @@ mod tests {
         volatile.push(130.0); // one spike
         let (lower_v, _mid_v, upper_v) = bollinger_bands(&volatile, 20, 2.0).unwrap();
         assert!(upper_v - lower_v > 0.0);
+    }
+
+    #[test]
+    fn real_atr_catches_a_gap_that_close_only_atr_would_miss() {
+        // Day 2 gaps up hard: prior close 100, but opens/trades entirely
+        // above that with a high of 130 and low of 125 - a 5-point daily
+        // range, but a 30-point true range once the gap from the prior
+        // close is accounted for. atr_from_closes only sees close-to-close
+        // (100 -> 128ish), real atr() sees the full gap.
+        let closes = vec![
+            100.0, 128.0, 127.0, 126.0, 125.0, 124.0, 123.0, 122.0, 121.0, 120.0, 119.0,
+        ];
+        let highs = vec![
+            101.0, 130.0, 128.0, 127.0, 126.0, 125.0, 124.0, 123.0, 122.0, 121.0, 120.0,
+        ];
+        let lows = vec![
+            99.0, 125.0, 126.0, 125.0, 124.0, 123.0, 122.0, 121.0, 120.0, 119.0, 118.0,
+        ];
+
+        let real = atr(&highs, &lows, &closes, 10).unwrap();
+        let approx = atr_from_closes(&closes, 10).unwrap();
+        assert!(real >= approx, "real ATR ({real:.2}) should be >= close-only approximation ({approx:.2}) once the gap is counted");
     }
 }

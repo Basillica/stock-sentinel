@@ -168,6 +168,71 @@ impl OllamaClient {
 
         self.generate_json(prompt).await
     }
+
+    /// Synthesizes a broad, multi-region sweep of market news into a
+    /// structured digest: what looks like a genuine opportunity worth
+    /// researching, what looks like a fading/deteriorating narrative, and
+    /// general macro context - explicitly NOT buy/sell directives. Same
+    /// pattern as `analyze_theme`, just scoped to "everything" instead of
+    /// one predefined theme.
+    pub async fn analyze_digest(&self, entries: &[String]) -> Result<DigestReport> {
+        if entries.is_empty() {
+            return Ok(DigestReport {
+                overview: "No news gathered for this digest run.".into(),
+                items: vec![],
+            });
+        }
+
+        let joined = entries
+            .iter()
+            .take(80)
+            .enumerate()
+            .map(|(i, e)| format!("{}. {}", i + 1, e))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt = format!(
+            "You are a market analyst producing a daily research digest for an individual \
+             investor. You are NOT giving investment advice or predicting prices - you are \
+             helping them decide what's worth spending their own research time on today, \
+             across ALL regions represented below, not just the ones that dominate headline \
+             volume. Be selective: most days most news is routine, and a digest that flags \
+             everything is useless. Only include items with a genuinely clear angle.\n\n\
+             News entries (tagged by region or source where known):\n{joined}\n\n\
+             Respond with ONLY a JSON object, no other text, no markdown fences, matching \
+             exactly this shape:\n\
+             {{\"overview\": <2-3 sentence plain-language summary of today's overall picture>, \
+             \"items\": [{{\"category\": <one of \\\"opportunity\\\", \\\"fading\\\", \\\"macro\\\">, \
+             \"headline\": <short plain-language label for this item>, \
+             \"region\": <region or sector>, \
+             \"tickers\": [<any relevant tickers mentioned, empty if none>], \
+             \"why_it_matters\": <1-2 sentences - the actual reasoning, not just a restatement>}}]}}\n\n\
+             \"opportunity\" = a strengthening narrative worth researching as a potential buy \
+             candidate. \"fading\" = a weakening narrative worth researching as a reason to \
+             reduce exposure or avoid. \"macro\" = broader context (rates, policy, geopolitics) \
+             that doesn't map to a specific trade idea but is worth knowing. Cap the list at \
+             around 8 items - be selective, not exhaustive."
+        );
+
+        self.generate_json(prompt).await
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DigestItem {
+    pub category: String,
+    pub headline: String,
+    pub region: String,
+    #[serde(default)]
+    pub tickers: Vec<String>,
+    pub why_it_matters: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DigestReport {
+    pub overview: String,
+    #[serde(default)]
+    pub items: Vec<DigestItem>,
 }
 
 #[derive(Deserialize)]

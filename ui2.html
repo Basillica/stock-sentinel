@@ -1,0 +1,2588 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SENTINEL — Control Panel</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="A rules-based control panel for the stock-sentinel decision engine."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #10141b;
+        --bg-panel: #161b24;
+        --bg-inset: #0b0e13;
+        --bg-hover: #1d2430;
+        --ink: #e8e6df;
+        --ink-dim: #8a8f9c;
+        --ink-faint: #565d6b;
+        --line: #262c38;
+        --line-soft: #1c212b;
+        --amber: #e8a33d;
+        --amber-dim: #8a6524;
+        --amber-glow: rgba(232, 163, 61, 0.16);
+        --teal: #4fbf9f;
+        --teal-glow: rgba(79, 191, 159, 0.14);
+        --red: #e8685a;
+        --red-glow: rgba(232, 104, 90, 0.16);
+        --violet: #9c90e0;
+        --radius: 10px;
+        --radius-sm: 6px;
+        --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
+        --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font-family: var(--sans);
+        font-size: 14px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      ::selection {
+        background: var(--amber-glow);
+        color: var(--amber);
+      }
+      a {
+        color: var(--amber);
+      }
+      ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      ::-webkit-scrollbar-track {
+        background: var(--bg);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--line);
+        border-radius: 6px;
+      }
+      :focus-visible {
+        outline: 2px solid var(--amber);
+        outline-offset: 2px;
+      }
+
+      /* ---------- layout shell ---------- */
+      .shell {
+        display: flex;
+        min-height: 100vh;
+      }
+      .rail {
+        width: 216px;
+        flex: none;
+        background: var(--bg-panel);
+        border-right: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        padding: 20px 12px;
+        gap: 2px;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        overflow-y: auto;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 10px 22px 10px;
+      }
+      .brand-mark {
+        width: 30px;
+        height: 30px;
+        border-radius: 7px;
+        background: var(--bg-inset);
+        border: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--amber);
+        flex: none;
+      }
+      .brand-text {
+        font-family: var(--mono);
+        font-weight: 600;
+        font-size: 15px;
+        letter-spacing: 0.06em;
+        color: var(--ink);
+      }
+      .brand-sub {
+        font-size: 10px;
+        color: var(--ink-faint);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-top: 1px;
+      }
+
+      .rail-btn {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        padding: 9px 10px;
+        border-radius: var(--radius-sm);
+        background: none;
+        border: none;
+        color: var(--ink-dim);
+        font-family: var(--sans);
+        font-size: 13.5px;
+        text-align: left;
+        cursor: pointer;
+        width: 100%;
+        transition:
+          background 0.15s,
+          color 0.15s;
+      }
+      .rail-btn svg {
+        flex: none;
+        opacity: 0.8;
+      }
+      .rail-btn:hover {
+        background: var(--bg-hover);
+        color: var(--ink);
+      }
+      .rail-btn.active {
+        background: var(--amber-glow);
+        color: var(--amber);
+      }
+      .rail-btn.active svg {
+        opacity: 1;
+      }
+      .rail-gap {
+        flex: 1;
+      }
+      .rail-foot {
+        padding: 10px 10px 4px;
+        font-size: 10.5px;
+        color: var(--ink-faint);
+        font-family: var(--mono);
+        line-height: 1.6;
+      }
+
+      .main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 14px 28px;
+        border-bottom: 1px solid var(--line);
+        position: sticky;
+        top: 0;
+        background: rgba(16, 20, 27, 0.9);
+        backdrop-filter: blur(8px);
+        z-index: 5;
+      }
+      .topbar-title {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--ink-dim);
+        letter-spacing: 0.02em;
+      }
+      .topbar-gap {
+        flex: 1;
+      }
+      .pill {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 5px 11px;
+        border-radius: 999px;
+        background: var(--bg-inset);
+        border: 1px solid var(--line);
+        font-family: var(--mono);
+        font-size: 11.5px;
+        color: var(--ink-dim);
+      }
+      .light {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex: none;
+        background: var(--ink-faint);
+      }
+      .light-safe {
+        background: var(--teal);
+        box-shadow: 0 0 8px var(--teal-glow);
+      }
+      .light-warn {
+        background: var(--amber);
+        box-shadow: 0 0 8px var(--amber-glow);
+      }
+      .light-danger {
+        background: var(--red);
+        box-shadow: 0 0 8px var(--red-glow);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.45;
+        }
+      }
+
+      .content {
+        flex: 1;
+        padding: 28px;
+        max-width: 1180px;
+        width: 100%;
+        margin: 0 auto;
+      }
+      .panel {
+        display: none;
+        animation: rise 0.35s ease both;
+      }
+      .panel.active {
+        display: block;
+      }
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .panel-head {
+        margin-bottom: 22px;
+      }
+      .eyebrow {
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--amber);
+        margin-bottom: 6px;
+      }
+      h1 {
+        font-family: var(--sans);
+        font-weight: 600;
+        font-size: 22px;
+        margin: 0 0 6px 0;
+        color: var(--ink);
+      }
+      .panel-desc {
+        color: var(--ink-dim);
+        font-size: 13.5px;
+        max-width: 640px;
+      }
+
+      /* ---------- primitives ---------- */
+      .grid {
+        display: grid;
+        gap: 16px;
+      }
+      .grid-2 {
+        grid-template-columns: 1fr 1fr;
+      }
+      .grid-3 {
+        grid-template-columns: repeat(3, 1fr);
+      }
+      @media (max-width: 820px) {
+        .grid-2,
+        .grid-3 {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .card {
+        background: var(--bg-panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 18px 20px;
+      }
+      .card-title {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink-faint);
+        margin-bottom: 10px;
+        font-family: var(--mono);
+      }
+      .stat {
+        font-family: var(--mono);
+        font-size: 26px;
+        font-weight: 600;
+        color: var(--ink);
+      }
+      .stat-sub {
+        font-size: 12px;
+        color: var(--ink-dim);
+        margin-top: 4px;
+      }
+      .stat.up {
+        color: var(--teal);
+      }
+      .stat.down {
+        color: var(--red);
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .row-between {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .stack {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .divider {
+        height: 1px;
+        background: var(--line);
+        border: none;
+        margin: 16px 0;
+      }
+
+      .btn {
+        font-family: var(--sans);
+        font-size: 13px;
+        font-weight: 500;
+        padding: 8px 14px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--line);
+        background: var(--bg-inset);
+        color: var(--ink);
+        cursor: pointer;
+        transition:
+          border-color 0.15s,
+          color 0.15s,
+          background 0.15s;
+        white-space: nowrap;
+      }
+      .btn:hover {
+        border-color: var(--ink-faint);
+        color: var(--ink);
+      }
+      .btn-primary {
+        background: var(--amber);
+        border-color: var(--amber);
+        color: #1a1206;
+        font-weight: 600;
+      }
+      .btn-primary:hover {
+        background: #f0ae4c;
+        border-color: #f0ae4c;
+        color: #1a1206;
+      }
+      .btn-danger {
+        color: var(--red);
+        border-color: var(--red);
+      }
+      .btn-danger:hover {
+        background: var(--red-glow);
+      }
+      .btn-ghost {
+        background: none;
+        border-color: transparent;
+        color: var(--ink-dim);
+      }
+      .btn-ghost:hover {
+        color: var(--ink);
+        background: var(--bg-hover);
+      }
+      .btn-sm {
+        padding: 5px 10px;
+        font-size: 12px;
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .btn[data-loading="1"] {
+        opacity: 0.6;
+        cursor: wait;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .field label {
+        font-size: 11.5px;
+        color: var(--ink-dim);
+        font-family: var(--mono);
+        letter-spacing: 0.02em;
+      }
+      .field input,
+      .field select,
+      .field textarea {
+        font-family: var(--mono);
+        font-size: 13px;
+        background: var(--bg-inset);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 8px 10px;
+        color: var(--ink);
+        width: 100%;
+      }
+      .field input:focus,
+      .field select:focus,
+      .field textarea:focus {
+        border-color: var(--amber);
+      }
+      .field textarea {
+        font-family: var(--mono);
+        resize: vertical;
+        min-height: 64px;
+      }
+      .field-hint {
+        font-size: 11px;
+        color: var(--ink-faint);
+      }
+      .form-row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: end;
+      }
+      .form-row .field {
+        flex: 1;
+        min-width: 140px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th {
+        text-align: left;
+        font-family: var(--mono);
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--ink-faint);
+        font-weight: 500;
+        padding: 0 10px 8px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      td {
+        padding: 10px;
+        border-bottom: 1px solid var(--line-soft);
+        font-family: var(--mono);
+        color: var(--ink);
+      }
+      tbody tr:hover {
+        background: var(--bg-hover);
+      }
+      th.num,
+      td.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .empty-note {
+        color: var(--ink-faint);
+        font-size: 13px;
+        padding: 18px 4px;
+        font-style: normal;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--mono);
+        font-size: 12px;
+        background: var(--bg-inset);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 4px 10px;
+        color: var(--ink-dim);
+      }
+      .chip button {
+        background: none;
+        border: none;
+        color: var(--ink-faint);
+        cursor: pointer;
+        font-size: 13px;
+        line-height: 1;
+        padding: 0;
+      }
+      .chip button:hover {
+        color: var(--red);
+      }
+
+      .tag {
+        font-family: var(--mono);
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: 2px 7px;
+        border-radius: 4px;
+      }
+      .tag-safe {
+        background: var(--teal-glow);
+        color: var(--teal);
+      }
+      .tag-warn {
+        background: var(--amber-glow);
+        color: var(--amber);
+      }
+      .tag-danger {
+        background: var(--red-glow);
+        color: var(--red);
+      }
+      .tag-neutral {
+        background: var(--bg-inset);
+        color: var(--ink-faint);
+        border: 1px solid var(--line);
+      }
+
+      /* ---------- evidence trace (signature element) ---------- */
+      .trace-card {
+        background: var(--bg-inset);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 18px 20px;
+        margin-bottom: 14px;
+      }
+      .trace-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 4px;
+      }
+      .trace-ticker {
+        font-family: var(--mono);
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      .verdict {
+        font-family: var(--mono);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        padding: 5px 12px;
+        border-radius: 5px;
+        border: 1px solid transparent;
+      }
+      .verdict-safe {
+        background: var(--teal-glow);
+        color: var(--teal);
+        border-color: rgba(79, 191, 159, 0.35);
+      }
+      .verdict-warn {
+        background: var(--amber-glow);
+        color: var(--amber);
+        border-color: rgba(232, 163, 61, 0.35);
+      }
+      .verdict-danger {
+        background: var(--red-glow);
+        color: var(--red);
+        border-color: rgba(232, 104, 90, 0.35);
+      }
+      .trace-reason {
+        font-size: 13px;
+        color: var(--ink-dim);
+        margin: 8px 0 2px;
+      }
+      .trace-sub {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink-faint);
+        margin-bottom: 10px;
+      }
+      .trace-rows {
+        margin-top: 12px;
+        display: flex;
+        flex-direction: column;
+      }
+      .trace-row {
+        display: grid;
+        grid-template-columns: 150px 1fr;
+        gap: 14px;
+        padding: 9px 0;
+        border-top: 1px solid var(--line-soft);
+      }
+      .trace-row:first-child {
+        border-top: none;
+      }
+      .trace-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .trace-source {
+        font-family: var(--mono);
+        font-size: 9.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink-faint);
+      }
+      .trace-label {
+        font-size: 12.5px;
+        color: var(--ink);
+        font-weight: 500;
+      }
+      .trace-bar-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .trace-bar-track {
+        position: relative;
+        flex: 1;
+        height: 6px;
+        background: var(--bg-panel);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      .trace-bar-zero {
+        position: absolute;
+        left: 50%;
+        top: 0;
+        bottom: 0;
+        width: 1px;
+        background: var(--line);
+      }
+      .trace-bar-fill {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        border-radius: 3px;
+      }
+      .trace-pos {
+        background: var(--teal);
+      }
+      .trace-neg {
+        background: var(--red);
+      }
+      .trace-weight {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink-dim);
+        width: 46px;
+        text-align: right;
+        flex: none;
+      }
+      .trace-detail {
+        font-size: 12.5px;
+        color: var(--ink-dim);
+        margin-top: 5px;
+        line-height: 1.5;
+      }
+      .trace-empty {
+        color: var(--ink-faint);
+        font-size: 12.5px;
+        padding: 6px 0;
+      }
+
+      .sparkline {
+        width: 100%;
+        height: 52px;
+        color: var(--teal);
+      }
+      .spark-down {
+        color: var(--red);
+      }
+
+      .bar-compare {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 6px;
+      }
+      .bar-compare-row {
+        display: grid;
+        grid-template-columns: 96px 1fr 64px;
+        align-items: center;
+        gap: 10px;
+      }
+      .bar-compare-label {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink-dim);
+      }
+      .bar-compare-track {
+        height: 10px;
+        background: var(--bg-panel);
+        border-radius: 5px;
+        overflow: hidden;
+        position: relative;
+      }
+      .bar-compare-fill {
+        height: 100%;
+        border-radius: 5px;
+      }
+      .bar-compare-val {
+        font-family: var(--mono);
+        font-size: 12px;
+        text-align: right;
+      }
+
+      .timeline {
+        display: flex;
+        flex-direction: column;
+      }
+      .timeline-row {
+        display: grid;
+        grid-template-columns: 150px 60px 1fr;
+        gap: 14px;
+        padding: 10px 0;
+        border-top: 1px solid var(--line-soft);
+        align-items: start;
+      }
+      .timeline-row:first-child {
+        border-top: none;
+      }
+      .timeline-time {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink-faint);
+      }
+      .timeline-body {
+        font-size: 12.5px;
+        color: var(--ink-dim);
+        line-height: 1.5;
+      }
+
+      .banner {
+        border-radius: var(--radius);
+        padding: 12px 16px;
+        font-size: 13px;
+        margin-bottom: 18px;
+        border: 1px solid;
+        display: flex;
+        gap: 10px;
+        align-items: start;
+      }
+      .banner-warn {
+        background: var(--amber-glow);
+        border-color: rgba(232, 163, 61, 0.35);
+        color: var(--amber);
+      }
+      .banner-danger {
+        background: var(--red-glow);
+        border-color: rgba(232, 104, 90, 0.35);
+        color: var(--red);
+      }
+      .banner a {
+        color: inherit;
+        text-decoration: underline;
+      }
+
+      #toast-region {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        z-index: 50;
+        max-width: 340px;
+      }
+      .toast {
+        background: var(--bg-panel);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--amber);
+        border-radius: var(--radius-sm);
+        padding: 11px 14px;
+        font-size: 12.5px;
+        color: var(--ink);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+        opacity: 0;
+        transform: translateY(6px);
+        transition:
+          opacity 0.25s,
+          transform 0.25s;
+      }
+      .toast.show {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .toast-error {
+        border-left-color: var(--red);
+      }
+      .toast-success {
+        border-left-color: var(--teal);
+      }
+
+      .skeleton {
+        background: linear-gradient(
+          90deg,
+          var(--bg-inset) 25%,
+          var(--bg-hover) 50%,
+          var(--bg-inset) 75%
+        );
+        background-size: 400% 100%;
+        animation: shimmer 1.4s ease infinite;
+        border-radius: var(--radius-sm);
+        height: 14px;
+      }
+      @keyframes shimmer {
+        0% {
+          background-position: 100% 0;
+        }
+        100% {
+          background-position: -100% 0;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation-duration: 0.001s !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.001s !important;
+        }
+      }
+
+      @media (max-width: 860px) {
+        .rail {
+          position: fixed;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          top: auto;
+          width: 100%;
+          height: auto;
+          flex-direction: row;
+          border-right: none;
+          border-top: 1px solid var(--line);
+          padding: 6px 8px;
+          overflow-x: auto;
+          z-index: 20;
+        }
+        .brand,
+        .rail-gap,
+        .rail-foot {
+          display: none;
+        }
+        .rail-btn {
+          flex-direction: column;
+          gap: 4px;
+          font-size: 10px;
+          padding: 8px 10px;
+          flex: none;
+        }
+        .main {
+          padding-bottom: 64px;
+        }
+        .content {
+          padding: 18px;
+        }
+        .topbar {
+          padding: 12px 18px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="rail" id="rail">
+        <div class="brand">
+          <div class="brand-mark">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+            >
+              <path d="M3 17l5-6 4 4 8-10" />
+              <path d="M15 5h5v5" />
+            </svg>
+          </div>
+          <div>
+            <div class="brand-text">SENTINEL</div>
+            <div class="brand-sub">Control Panel</div>
+          </div>
+        </div>
+
+        <button class="rail-btn active" data-panel="overview">
+          <svg
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 12l4-4" />
+            <path d="M12 7v1" />
+          </svg>
+          Overview
+        </button>
+        <button class="rail-btn" data-panel="positions">
+          <svg
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <rect x="3.5" y="4" width="17" height="4.2" rx="1" />
+            <rect x="3.5" y="10" width="17" height="4.2" rx="1" />
+            <rect x="3.5" y="16" width="17" height="4.2" rx="1" />
+          </svg>
+          Positions
+        </button>
+        <button class="rail-btn" data-panel="watchlist">
+          <svg
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          Watchlist
+        </button>
+        <button class="rail-btn" data-panel="themes">
+          <svg
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z" />
+          </svg>
+          Themes
+        </button>
+        <button class="rail-btn" data-panel="backtest">
+          <svg
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <path d="M4 20V10M11 20V4M18 20v-7" />
+          </svg>
+          Backtest
+        </button>
+        <button class="rail-btn" data-panel="risk">
+          <svg
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z" />
+          </svg>
+          Risk sizing
+        </button>
+        <button class="rail-btn" data-panel="lookup">
+          <svg
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <circle cx="10.5" cy="10.5" r="6.5" />
+            <path d="M20 20l-4.9-4.9" />
+          </svg>
+          Lookup
+        </button>
+
+        <div class="rail-gap"></div>
+
+        <button class="rail-btn" data-panel="settings">
+          <svg
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <circle cx="12" cy="12" r="3" />
+            <path
+              d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 0 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"
+            />
+          </svg>
+          Settings
+        </button>
+        <div class="rail-foot">stock&#8209;sentinel UI<br />v1.0</div>
+      </aside>
+
+      <div class="main">
+        <header class="topbar">
+          <span class="topbar-title" id="topbar-title">Overview</span>
+          <div class="topbar-gap"></div>
+          <span
+            class="pill"
+            id="breaker-pill"
+            title="Portfolio circuit breaker"
+          >
+            <span class="light" id="breaker-light"></span>
+            <span id="breaker-text">breaker —</span>
+          </span>
+          <span class="pill" id="conn-pill" title="API connection">
+            <span class="light" id="conn-light"></span>
+            <span id="conn-text">not connected</span>
+          </span>
+        </header>
+
+        <div class="content">
+          <!-- ============ OVERVIEW ============ -->
+          <section class="panel active" id="panel-overview">
+            <div class="panel-head">
+              <div class="eyebrow">System status</div>
+              <h1>Overview</h1>
+              <p class="panel-desc">
+                Aggregate portfolio health and a quick read on every open
+                position. Nothing here executes anything — it's the same
+                evidence trail the scanner uses.
+              </p>
+            </div>
+            <div id="ov-config-banner"></div>
+            <div class="grid grid-3" id="ov-stats">
+              <div class="card">
+                <div class="card-title">Current value</div>
+                <div class="skeleton" style="width: 80px"></div>
+              </div>
+              <div class="card">
+                <div class="card-title">Peak value</div>
+                <div class="skeleton" style="width: 80px"></div>
+              </div>
+              <div class="card">
+                <div class="card-title">Drawdown</div>
+                <div class="skeleton" style="width: 80px"></div>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <div class="row-between" style="margin-bottom: 10px">
+              <div class="card-title" style="margin: 0">Held positions</div>
+              <button class="btn btn-sm" id="ov-refresh">Refresh</button>
+            </div>
+            <div id="ov-positions"><div class="empty-note">Loading…</div></div>
+            <div id="ov-trace-results"></div>
+          </section>
+
+          <!-- ============ POSITIONS ============ -->
+          <section class="panel" id="panel-positions">
+            <div class="panel-head">
+              <div class="eyebrow">Holdings</div>
+              <h1>Positions</h1>
+              <p class="panel-desc">
+                Add what you actually hold. The trailing stop and take-profit
+                ladder run against these automatically on the server's scan
+                cycle.
+              </p>
+            </div>
+            <div class="card" style="margin-bottom: 20px">
+              <div class="card-title">Add a position</div>
+              <div class="form-row">
+                <div class="field">
+                  <label>Symbol</label
+                  ><input id="pos-symbol" placeholder="AMAT" />
+                </div>
+                <div class="field">
+                  <label>Entry price</label
+                  ><input
+                    id="pos-entry"
+                    type="number"
+                    step="any"
+                    placeholder="100.00"
+                  />
+                </div>
+                <div class="field">
+                  <label>Quantity</label
+                  ><input
+                    id="pos-qty"
+                    type="number"
+                    step="any"
+                    placeholder="10"
+                  />
+                </div>
+                <button class="btn btn-primary" id="pos-add">
+                  Add position
+                </button>
+              </div>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th class="num">Entry</th>
+                  <th class="num">Qty</th>
+                  <th class="num">Peak</th>
+                  <th class="num">Realized</th>
+                  <th>Opened</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="pos-table">
+                <tr>
+                  <td colspan="7" class="empty-note">Loading…</td>
+                </tr>
+              </tbody>
+            </table>
+            <div id="pos-trace-results"></div>
+          </section>
+
+          <!-- ============ WATCHLIST ============ -->
+          <section class="panel" id="panel-watchlist">
+            <div class="panel-head">
+              <div class="eyebrow">Candidates</div>
+              <h1>Watchlist</h1>
+              <p class="panel-desc">
+                Tickers you don't hold yet. Evaluated the same way as positions
+                — RSI, trend, MACD, Bollinger Bands, news, and (if configured)
+                analyst consensus — scored into Buy / Watch / Avoid.
+              </p>
+            </div>
+            <div class="card" style="margin-bottom: 20px">
+              <div class="row-between">
+                <div class="row" style="flex: 1">
+                  <input
+                    id="wl-symbol"
+                    placeholder="Add symbol, e.g. NVDA"
+                    style="
+                      font-family: var(--mono);
+                      font-size: 13px;
+                      background: var(--bg-inset);
+                      border: 1px solid var(--line);
+                      border-radius: 6px;
+                      padding: 8px 10px;
+                      color: var(--ink);
+                      flex: 1;
+                      min-width: 160px;
+                    "
+                  />
+                  <button class="btn" id="wl-add">Add to watchlist</button>
+                </div>
+                <button class="btn btn-primary" id="wl-evaluate">
+                  Evaluate all
+                </button>
+              </div>
+              <div class="divider"></div>
+              <div class="row" id="wl-chips">
+                <span class="empty-note">Loading…</span>
+              </div>
+            </div>
+            <div id="wl-trace-results"></div>
+          </section>
+
+          <!-- ============ THEMES ============ -->
+          <section class="panel" id="panel-themes">
+            <div class="panel-head">
+              <div class="eyebrow">Macro / geopolitical watch</div>
+              <h1>Themes</h1>
+              <p class="panel-desc">
+                Track a narrative — "German defense spending," "AI datacenter
+                buildout" — and get a conservative, research-only alert when it
+                looks like a genuinely durable shift. Never a buy signal.
+              </p>
+            </div>
+            <div class="card" style="margin-bottom: 20px">
+              <div class="card-title">Add a theme</div>
+              <div class="form-row">
+                <div class="field">
+                  <label>Name</label
+                  ><input id="th-name" placeholder="german_defense" />
+                </div>
+                <div class="field">
+                  <label>Keywords (comma-separated)</label
+                  ><input
+                    id="th-keywords"
+                    placeholder="Germany defense spending, NATO budget increase"
+                  />
+                </div>
+                <div class="field">
+                  <label>Symbols to watch (comma-separated)</label
+                  ><input id="th-symbols" placeholder="RHM.DE, RNMBY" />
+                </div>
+                <button class="btn btn-primary" id="th-add">Track theme</button>
+              </div>
+            </div>
+            <div id="th-list"><div class="empty-note">Loading…</div></div>
+          </section>
+
+          <!-- ============ BACKTEST ============ -->
+          <section class="panel" id="panel-backtest">
+            <div class="panel-head">
+              <div class="eyebrow">Validate before you trust it</div>
+              <h1>Backtest</h1>
+              <p class="panel-desc">
+                Replays the exact rule engine the live scanner uses against
+                stored price history for one symbol. Import historical closes
+                first if the server hasn't accumulated enough on its own.
+              </p>
+            </div>
+
+            <div class="card" style="margin-bottom: 16px">
+              <div class="form-row">
+                <div class="field" style="max-width: 160px">
+                  <label>Symbol</label
+                  ><input id="bt-symbol" placeholder="AMAT" />
+                </div>
+                <div class="field">
+                  <label
+                    >Import historical closes (comma-separated, oldest
+                    first)</label
+                  ><input
+                    id="bt-import"
+                    placeholder="100, 110, 125, 140, 155, 170, 160, 150"
+                  />
+                </div>
+                <button class="btn" id="bt-import-btn">Import</button>
+                <div class="field" style="max-width: 110px">
+                  <label>Backfill days</label
+                  ><input id="bt-backfill-days" type="number" value="100" />
+                </div>
+                <button class="btn" id="bt-backfill-btn">
+                  Backfill (Twelve Data)
+                </button>
+              </div>
+            </div>
+
+            <div class="grid grid-2">
+              <div class="card">
+                <div class="card-title">Single run</div>
+                <div class="stack">
+                  <div class="form-row">
+                    <div class="field">
+                      <label>Entry price</label
+                      ><input
+                        id="bt-entry"
+                        type="number"
+                        step="any"
+                        placeholder="100"
+                      />
+                    </div>
+                    <div class="field">
+                      <label>Trailing stop %</label
+                      ><input
+                        id="bt-stop"
+                        type="number"
+                        step="any"
+                        placeholder="15"
+                      />
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label
+                      >Take-profit ladder — "gain%:fraction" pairs,
+                      comma-separated</label
+                    ><input
+                      id="bt-ladder"
+                      placeholder="30:0.25, 60:0.25, 100:0.25"
+                    />
+                  </div>
+                  <button class="btn btn-primary" id="bt-run">
+                    Run backtest
+                  </button>
+                </div>
+                <div id="bt-result" style="margin-top: 16px"></div>
+              </div>
+              <div class="card">
+                <div class="card-title">Sweep — grid search</div>
+                <div class="stack">
+                  <div class="field">
+                    <label>Entry price</label
+                    ><input
+                      id="sw-entry"
+                      type="number"
+                      step="any"
+                      placeholder="100"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Stop % candidates (comma-separated)</label
+                    ><input id="sw-stops" placeholder="10, 15, 25, 40" />
+                  </div>
+                  <button class="btn btn-primary" id="sw-run">Run sweep</button>
+                </div>
+                <div id="sw-result" style="margin-top: 16px"></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============ RISK ============ -->
+          <section class="panel" id="panel-risk">
+            <div class="panel-head">
+              <div class="eyebrow">Fixed-fractional sizing</div>
+              <h1>Risk sizing</h1>
+              <p class="panel-desc">
+                How many shares to buy falls out of your risk budget and your
+                stop distance — not the other way around.
+              </p>
+            </div>
+            <div class="grid grid-2">
+              <div class="card">
+                <div class="stack">
+                  <div class="field">
+                    <label>Account equity</label
+                    ><input
+                      id="rk-equity"
+                      type="number"
+                      step="any"
+                      placeholder="10000"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Risk % per trade</label
+                    ><input
+                      id="rk-pct"
+                      type="number"
+                      step="any"
+                      placeholder="1"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Entry price</label
+                    ><input
+                      id="rk-entry"
+                      type="number"
+                      step="any"
+                      placeholder="100"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Stop price</label
+                    ><input
+                      id="rk-stop"
+                      type="number"
+                      step="any"
+                      placeholder="85"
+                    />
+                  </div>
+                  <button class="btn btn-primary" id="rk-run">Calculate</button>
+                </div>
+              </div>
+              <div class="card" id="rk-result">
+                <div class="card-title">Result</div>
+                <div class="empty-note">Fill in the form and calculate.</div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============ LOOKUP ============ -->
+          <section class="panel" id="panel-lookup">
+            <div class="panel-head">
+              <div class="eyebrow">Research</div>
+              <h1>Symbol lookup</h1>
+              <p class="panel-desc">
+                Fundamentals, peers, price history, and the audit trail of what
+                the scanner has decided about this symbol over time.
+              </p>
+            </div>
+            <div class="card" style="margin-bottom: 20px">
+              <div class="row">
+                <input
+                  id="lk-symbol"
+                  placeholder="Symbol, e.g. AMAT"
+                  style="
+                    font-family: var(--mono);
+                    font-size: 13px;
+                    background: var(--bg-inset);
+                    border: 1px solid var(--line);
+                    border-radius: 6px;
+                    padding: 8px 10px;
+                    color: var(--ink);
+                    flex: 1;
+                    min-width: 160px;
+                  "
+                />
+                <button class="btn btn-primary" id="lk-go">Look up</button>
+              </div>
+            </div>
+            <div class="grid grid-2">
+              <div class="card">
+                <div class="card-title">Price history</div>
+                <div id="lk-history">
+                  <div class="empty-note">Look up a symbol.</div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-title">Fundamentals &amp; peers</div>
+                <div id="lk-fundamentals">
+                  <div class="empty-note">Look up a symbol.</div>
+                </div>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <div class="card-title">Evaluation history</div>
+            <div id="lk-evals">
+              <div class="empty-note">Look up a symbol.</div>
+            </div>
+          </section>
+
+          <!-- ============ SETTINGS ============ -->
+          <section class="panel" id="panel-settings">
+            <div class="panel-head">
+              <div class="eyebrow">Connection</div>
+              <h1>Settings</h1>
+              <p class="panel-desc">
+                This is a static frontend — it talks directly to your
+                stock-sentinel server from your browser. Nothing is sent
+                anywhere else, and your token is only stored in this browser's
+                local storage.
+              </p>
+            </div>
+            <div class="card" style="max-width: 520px">
+              <div class="stack">
+                <div class="field">
+                  <label>API base URL</label>
+                  <input
+                    id="set-api"
+                    placeholder="https://your-server.example.com"
+                  />
+                  <span class="field-hint"
+                    >No trailing slash. Must be reachable from this browser and
+                    allow CORS (the default build does).</span
+                  >
+                </div>
+                <div class="field">
+                  <label>Bearer token</label>
+                  <input
+                    id="set-token"
+                    placeholder="your API_AUTH_TOKEN"
+                    type="password"
+                  />
+                  <span class="field-hint"
+                    >Only needed if the server was started with API_AUTH_TOKEN
+                    set.</span
+                  >
+                </div>
+                <div class="row">
+                  <button class="btn btn-primary" id="set-save">Save</button>
+                  <button class="btn" id="set-test">Test connection</button>
+                </div>
+                <div id="set-status"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast-region"></div>
+
+    <script>
+      (() => {
+        "use strict";
+
+        /* ---------------- core state & api helper ---------------- */
+        const LS_API = "sentinel.apiBase";
+        const LS_TOKEN = "sentinel.token";
+        const state = {
+          apiBase: localStorage.getItem(LS_API) || "",
+          token: localStorage.getItem(LS_TOKEN) || "",
+          connected: false,
+        };
+
+        function esc(s) {
+          return String(s ?? "").replace(
+            /[&<>"']/g,
+            (c) =>
+              ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+              })[c],
+          );
+        }
+
+        function fmt(n, digits) {
+          if (n === null || n === undefined || Number.isNaN(n)) return "—";
+          return Number(n).toLocaleString(undefined, {
+            minimumFractionDigits: digits ?? 2,
+            maximumFractionDigits: digits ?? 2,
+          });
+        }
+
+        function fmtDate(iso) {
+          if (!iso) return "—";
+          try {
+            return new Date(iso).toLocaleString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+          } catch {
+            return iso;
+          }
+        }
+
+        function toast(msg, type) {
+          const region = document.getElementById("toast-region");
+          const el = document.createElement("div");
+          el.className = "toast" + (type ? " toast-" + type : "");
+          el.textContent = msg;
+          region.appendChild(el);
+          requestAnimationFrame(() => el.classList.add("show"));
+          setTimeout(() => {
+            el.classList.remove("show");
+            setTimeout(() => el.remove(), 300);
+          }, 4500);
+        }
+
+        async function api(path, opts) {
+          opts = opts || {};
+          if (!state.apiBase) {
+            toast("Set your API URL in Settings first.", "error");
+            throw new Error("no api base configured");
+          }
+          const url = state.apiBase.replace(/\/+$/, "") + path;
+          const headers = Object.assign({}, opts.headers || {});
+          if (opts.body) headers["Content-Type"] = "application/json";
+          if (state.token) headers["Authorization"] = "Bearer " + state.token;
+          let res;
+          try {
+            res = await fetch(url, Object.assign({}, opts, { headers }));
+          } catch (e) {
+            setConn(false);
+            toast(
+              "Can't reach " +
+                state.apiBase +
+                " — check the URL and that the server is running.",
+              "error",
+            );
+            throw e;
+          }
+          if (res.status === 401) {
+            toast(
+              "401 Unauthorized — check the bearer token in Settings.",
+              "error",
+            );
+            throw new Error("unauthorized");
+          }
+          if (!res.ok) {
+            let detail = "";
+            try {
+              detail = await res.text();
+            } catch {}
+            toast(
+              `${res.status} on ${path}${detail ? " — " + detail.slice(0, 120) : ""}`,
+              "error",
+            );
+            throw new Error("http " + res.status);
+          }
+          setConn(true);
+          const ct = res.headers.get("content-type") || "";
+          if (res.status === 204) return null;
+          if (ct.includes("application/json")) return res.json();
+          return null;
+        }
+
+        function setConn(ok) {
+          state.connected = ok;
+          const light = document.getElementById("conn-light");
+          const text = document.getElementById("conn-text");
+          light.className = "light " + (ok ? "light-safe" : "light-danger");
+          text.textContent = ok ? "connected" : "connection error";
+        }
+
+        /* ---------------- shared render helpers ---------------- */
+        function verdictMeta(v) {
+          const map = {
+            sell_all: { label: "SELL ALL", tone: "danger" },
+            trim_profit: { label: "TRIM", tone: "warn" },
+            hold: { label: "HOLD", tone: "safe" },
+            watch: { label: "WATCH", tone: "warn" },
+            buy: { label: "BUY", tone: "safe" },
+            avoid: { label: "AVOID", tone: "danger" },
+            alert: { label: "ALERT", tone: "warn" },
+          };
+          return (
+            map[v && v.verdict] ||
+            map[v && v.action] || {
+              label: ((v && (v.verdict || v.action)) || "?").toUpperCase(),
+              tone: "neutral",
+            }
+          );
+        }
+
+        // Renders the signature "evidence trace" card from a PipelineResult
+        // ({symbol, trace:[{source,label,detail,weight}], verdict:{...}}).
+        function renderTrace(result) {
+          const meta = verdictMeta(result.verdict);
+          const trace = result.trace || [];
+          const maxAbs = Math.max(
+            0.25,
+            ...trace.map((e) => Math.abs(e.weight || 0)),
+          );
+          const rows = trace
+            .map((e) => {
+              const w = e.weight || 0;
+              const pct = Math.min(100, (Math.abs(w) / maxAbs) * 50);
+              const side = w >= 0 ? "pos" : "neg";
+              const style =
+                side === "pos"
+                  ? `left:50%;width:${pct}%;`
+                  : `right:50%;width:${pct}%;`;
+              return `
+        <div class="trace-row">
+          <div class="trace-meta">
+            <span class="trace-source">${esc(e.source)}</span>
+            <span class="trace-label">${esc(e.label)}</span>
+          </div>
+          <div>
+            <div class="trace-bar-wrap">
+              <div class="trace-bar-track">
+                <div class="trace-bar-zero"></div>
+                <div class="trace-bar-fill trace-${side}" style="${style}"></div>
+              </div>
+              <span class="trace-weight">${w >= 0 ? "+" : ""}${w.toFixed(2)}</span>
+            </div>
+            <div class="trace-detail">${esc(e.detail)}</div>
+          </div>
+        </div>`;
+            })
+            .join("");
+          const v = result.verdict || {};
+          const subBits = [];
+          if (v.confidence !== undefined && v.confidence !== null)
+            subBits.push(`confidence ${(v.confidence * 100).toFixed(0)}%`);
+          if (v.fraction !== undefined && v.fraction !== null)
+            subBits.push(`trim ${(v.fraction * 100).toFixed(0)}%`);
+          return `
+      <div class="trace-card">
+        <div class="trace-header">
+          <span class="trace-ticker">${esc(result.symbol)}</span>
+          <span class="verdict verdict-${meta.tone}">${meta.label}</span>
+        </div>
+        ${v.reason ? `<div class="trace-reason">${esc(v.reason)}</div>` : ""}
+        ${subBits.length ? `<div class="trace-sub">${subBits.join(" &middot; ")}</div>` : ""}
+        <div class="trace-rows">${rows || '<div class="trace-empty">No evidence collected this pass.</div>'}</div>
+      </div>`;
+        }
+
+        function sparkline(values, w, h) {
+          w = w || 400;
+          h = h || 56;
+          if (!values || values.length < 2)
+            return '<div class="empty-note">Not enough data yet — poll the scanner a few times or import history in Backtest.</div>';
+          const min = Math.min(...values),
+            max = Math.max(...values);
+          const range = max - min || 1;
+          const step = w / (values.length - 1);
+          const pts = values
+            .map(
+              (v, i) =>
+                `${(i * step).toFixed(1)},${(h - ((v - min) / range) * h).toFixed(1)}`,
+            )
+            .join(" ");
+          const up = values[values.length - 1] >= values[0];
+          return `
+      <svg viewBox="0 0 ${w} ${h}" class="sparkline ${up ? "spark-up" : "spark-down"}" preserveAspectRatio="none">
+        <polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      </svg>
+      <div class="row-between" style="margin-top:4px;">
+        <span class="trace-sub" style="margin:0;">${values.length} points</span>
+        <span class="trace-sub" style="margin:0;">${fmt(values[0])} &rarr; ${fmt(values[values.length - 1])}</span>
+      </div>`;
+        }
+
+        function parseLadder(str) {
+          if (!str || !str.trim()) return [];
+          return str
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .map((pair) => {
+              const [g, f] = pair.split(":").map((x) => parseFloat(x.trim()));
+              return [g, f];
+            })
+            .filter(([g, f]) => !Number.isNaN(g) && !Number.isNaN(f));
+        }
+
+        function withLoading(btn, fn) {
+          return async (...args) => {
+            if (btn.dataset.loading === "1") return;
+            btn.dataset.loading = "1";
+            const original = btn.textContent;
+            btn.textContent = "Working…";
+            btn.disabled = true;
+            try {
+              await fn(...args);
+            } finally {
+              btn.dataset.loading = "0";
+              btn.textContent = original;
+              btn.disabled = false;
+            }
+          };
+        }
+
+        /* ---------------- navigation ---------------- */
+        const panels = [
+          "overview",
+          "positions",
+          "watchlist",
+          "themes",
+          "backtest",
+          "risk",
+          "lookup",
+          "settings",
+        ];
+        const titles = {
+          overview: "Overview",
+          positions: "Positions",
+          watchlist: "Watchlist",
+          themes: "Themes",
+          backtest: "Backtest",
+          risk: "Risk sizing",
+          lookup: "Symbol lookup",
+          settings: "Settings",
+        };
+        function showPanel(name) {
+          if (!panels.includes(name)) name = "overview";
+          document
+            .querySelectorAll(".panel")
+            .forEach((p) => p.classList.remove("active"));
+          document
+            .querySelectorAll(".rail-btn")
+            .forEach((b) => b.classList.remove("active"));
+          document.getElementById("panel-" + name).classList.add("active");
+          const btn = document.querySelector(`.rail-btn[data-panel="${name}"]`);
+          if (btn) btn.classList.add("active");
+          document.getElementById("topbar-title").textContent = titles[name];
+          location.hash = name;
+          loadPanel(name);
+        }
+        document
+          .querySelectorAll(".rail-btn")
+          .forEach((btn) =>
+            btn.addEventListener("click", () => showPanel(btn.dataset.panel)),
+          );
+
+        function loadPanel(name) {
+          if (!state.apiBase) {
+            if (name !== "settings")
+              toast("Set your API URL in Settings to load data.", "error");
+            return;
+          }
+          if (name === "overview") loadOverview();
+          if (name === "positions") loadPositions();
+          if (name === "watchlist") loadWatchlist();
+          if (name === "themes") loadThemes();
+        }
+
+        /* ---------------- breaker light (polled lightly on every panel load) ---------------- */
+        async function refreshBreaker() {
+          if (!state.apiBase) return;
+          try {
+            const s = await api("/portfolio/status");
+            const light = document.getElementById("breaker-light");
+            const text = document.getElementById("breaker-text");
+            if (s.tripped) {
+              light.className = "light light-danger";
+              text.textContent = `breaker tripped ${fmt(s.drawdown_pct, 1)}%`;
+            } else if (s.current_value > 0) {
+              light.className = "light light-safe";
+              text.textContent = `drawdown ${fmt(s.drawdown_pct, 1)}%`;
+            } else {
+              light.className = "light";
+              text.textContent = "no positions yet";
+            }
+            return s;
+          } catch {
+            /* toast already fired inside api() */
+          }
+        }
+
+        /* ---------------- OVERVIEW ---------------- */
+        async function loadOverview() {
+          const banner = document.getElementById("ov-config-banner");
+          banner.innerHTML = "";
+          const s = await refreshBreaker().catch(() => null);
+          const statsEl = document.getElementById("ov-stats");
+          if (s) {
+            statsEl.innerHTML = `
+        <div class="card"><div class="card-title">Current value</div><div class="stat">${fmt(s.current_value)}</div><div class="stat-sub">peak ${fmt(s.peak_value)}</div></div>
+        <div class="card"><div class="card-title">Drawdown</div><div class="stat ${s.drawdown_pct < 0 ? "down" : ""}">${fmt(s.drawdown_pct, 1)}%</div><div class="stat-sub">limit ${fmt(s.limit_pct, 1)}%</div></div>
+        <div class="card"><div class="card-title">Circuit breaker</div><div class="stat ${s.tripped ? "down" : "up"}">${s.tripped ? "TRIPPED" : "CLEAR"}</div><div class="stat-sub">${s.tripped ? "new buys suppressed" : "new buys allowed"}</div></div>`;
+          }
+          let positions = [];
+          try {
+            positions = await api("/positions");
+          } catch {
+            positions = [];
+          }
+          const posEl = document.getElementById("ov-positions");
+          if (!positions.length) {
+            posEl.innerHTML =
+              '<div class="empty-note">No open positions yet — add one in the Positions tab.</div>';
+          } else {
+            posEl.innerHTML = `<table><thead><tr><th>Symbol</th><th class="num">Entry</th><th class="num">Peak</th><th></th></tr></thead><tbody>${positions
+              .map(
+                (p) => `
+          <tr>
+            <td>${esc(p.symbol)}</td>
+            <td class="num">${fmt(p.entry_price)}</td>
+            <td class="num">${fmt(p.peak_price)}</td>
+            <td><button class="btn btn-sm ov-check" data-symbol="${esc(p.symbol)}">Check signal</button></td>
+          </tr>`,
+              )
+              .join("")}</tbody></table>`;
+            posEl.querySelectorAll(".ov-check").forEach((btn) =>
+              btn.addEventListener(
+                "click",
+                withLoading(btn, async () => {
+                  const sym = btn.dataset.symbol;
+                  try {
+                    const result = await api(
+                      `/positions/${encodeURIComponent(sym)}/full-signal`,
+                    );
+                    document.getElementById("ov-trace-results").innerHTML =
+                      renderTrace(result) +
+                      document.getElementById("ov-trace-results").innerHTML;
+                  } catch {}
+                }),
+              ),
+            );
+          }
+        }
+        document
+          .getElementById("ov-refresh")
+          .addEventListener("click", () => loadOverview());
+
+        /* ---------------- POSITIONS ---------------- */
+        async function loadPositions() {
+          const tbody = document.getElementById("pos-table");
+          tbody.innerHTML =
+            '<tr><td colspan="7" class="empty-note">Loading…</td></tr>';
+          let positions = [];
+          try {
+            positions = await api("/positions");
+          } catch {
+            tbody.innerHTML =
+              '<tr><td colspan="7" class="empty-note">Couldn\'t load positions.</td></tr>';
+            return;
+          }
+          if (!positions.length) {
+            tbody.innerHTML =
+              '<tr><td colspan="7" class="empty-note">No positions yet. Add one above.</td></tr>';
+            return;
+          }
+          tbody.innerHTML = positions
+            .map(
+              (p) => `
+      <tr>
+        <td>${esc(p.symbol)}</td>
+        <td class="num">${fmt(p.entry_price)}</td>
+        <td class="num">${fmt(p.quantity, 2)}</td>
+        <td class="num">${fmt(p.peak_price)}</td>
+        <td class="num">${fmt((p.realized_fraction || 0) * 100, 0)}%</td>
+        <td>${fmtDate(p.opened_at)}</td>
+        <td>
+          <div class="row" style="gap:6px;">
+            <button class="btn btn-sm pos-signal" data-symbol="${esc(p.symbol)}">Signal</button>
+            <button class="btn btn-sm pos-full" data-symbol="${esc(p.symbol)}">Full</button>
+            <button class="btn btn-sm btn-danger pos-del" data-symbol="${esc(p.symbol)}">Delete</button>
+          </div>
+        </td>
+      </tr>`,
+            )
+            .join("");
+
+          tbody.querySelectorAll(".pos-signal").forEach((btn) =>
+            btn.addEventListener(
+              "click",
+              withLoading(btn, async () => {
+                const sym = btn.dataset.symbol;
+                try {
+                  const eval_ = await api(
+                    `/positions/${encodeURIComponent(sym)}/signal`,
+                  );
+                  const pseudo = {
+                    symbol: sym,
+                    trace: [
+                      {
+                        source: "technical",
+                        label: "gain",
+                        detail: `${fmt(eval_.gain_pct, 1)}% since entry`,
+                        weight: 0,
+                      },
+                      {
+                        source: "technical",
+                        label: "drawdown from peak",
+                        detail: `${fmt(eval_.drawdown_from_peak_pct, 1)}%`,
+                        weight: 0,
+                      },
+                    ],
+                    verdict: Object.assign(
+                      { verdict: eval_.signal.action },
+                      eval_.signal,
+                    ),
+                  };
+                  document.getElementById("pos-trace-results").innerHTML =
+                    renderTrace(pseudo) +
+                    document.getElementById("pos-trace-results").innerHTML;
+                } catch {}
+              }),
+            ),
+          );
+          tbody.querySelectorAll(".pos-full").forEach((btn) =>
+            btn.addEventListener(
+              "click",
+              withLoading(btn, async () => {
+                const sym = btn.dataset.symbol;
+                try {
+                  const result = await api(
+                    `/positions/${encodeURIComponent(sym)}/full-signal`,
+                  );
+                  document.getElementById("pos-trace-results").innerHTML =
+                    renderTrace(result) +
+                    document.getElementById("pos-trace-results").innerHTML;
+                } catch {}
+              }),
+            ),
+          );
+          tbody.querySelectorAll(".pos-del").forEach((btn) =>
+            btn.addEventListener(
+              "click",
+              withLoading(btn, async () => {
+                if (
+                  !confirm(
+                    `Delete position ${btn.dataset.symbol}? This only removes it from tracking, it does not sell anything.`,
+                  )
+                )
+                  return;
+                try {
+                  await api(
+                    `/positions/${encodeURIComponent(btn.dataset.symbol)}`,
+                    { method: "DELETE" },
+                  );
+                  toast(`${btn.dataset.symbol} removed.`, "success");
+                  loadPositions();
+                } catch {}
+              }),
+            ),
+          );
+        }
+        document.getElementById("pos-add").addEventListener(
+          "click",
+          withLoading(document.getElementById("pos-add"), async () => {
+            const symbol = document
+              .getElementById("pos-symbol")
+              .value.trim()
+              .toUpperCase();
+            const entry_price = parseFloat(
+              document.getElementById("pos-entry").value,
+            );
+            const quantity = parseFloat(
+              document.getElementById("pos-qty").value,
+            );
+            if (
+              !symbol ||
+              Number.isNaN(entry_price) ||
+              Number.isNaN(quantity)
+            ) {
+              toast("Fill in symbol, entry price, and quantity.", "error");
+              return;
+            }
+            try {
+              await api("/positions", {
+                method: "POST",
+                body: JSON.stringify({ symbol, entry_price, quantity }),
+              });
+              toast(`${symbol} added.`, "success");
+              document.getElementById("pos-symbol").value = "";
+              document.getElementById("pos-entry").value = "";
+              document.getElementById("pos-qty").value = "";
+              loadPositions();
+            } catch {}
+          }),
+        );
+
+        /* ---------------- WATCHLIST ---------------- */
+        async function loadWatchlist() {
+          const chips = document.getElementById("wl-chips");
+          chips.innerHTML = '<span class="empty-note">Loading…</span>';
+          let list = [];
+          try {
+            list = await api("/watchlist");
+          } catch {
+            chips.innerHTML =
+              '<span class="empty-note">Couldn\'t load watchlist.</span>';
+            return;
+          }
+          if (!list.length) {
+            chips.innerHTML =
+              '<span class="empty-note">No symbols on the watchlist yet.</span>';
+            return;
+          }
+          chips.innerHTML = list
+            .map(
+              (sym) =>
+                `<span class="chip">${esc(sym)}<button data-symbol="${esc(sym)}" title="Remove" aria-label="Remove ${esc(sym)}">&times;</button></span>`,
+            )
+            .join("");
+          chips.querySelectorAll("button").forEach((b) =>
+            b.addEventListener("click", async () => {
+              try {
+                await api(
+                  `/watchlist/${encodeURIComponent(b.dataset.symbol)}`,
+                  { method: "DELETE" },
+                );
+                loadWatchlist();
+              } catch {}
+            }),
+          );
+        }
+        document.getElementById("wl-add").addEventListener(
+          "click",
+          withLoading(document.getElementById("wl-add"), async () => {
+            const input = document.getElementById("wl-symbol");
+            const symbol = input.value.trim().toUpperCase();
+            if (!symbol) return;
+            try {
+              await api("/watchlist", {
+                method: "POST",
+                body: JSON.stringify({ symbol }),
+              });
+              input.value = "";
+              toast(`${symbol} added to watchlist.`, "success");
+              loadWatchlist();
+            } catch {}
+          }),
+        );
+        document.getElementById("wl-evaluate").addEventListener(
+          "click",
+          withLoading(document.getElementById("wl-evaluate"), async () => {
+            let list = [];
+            try {
+              list = await api("/watchlist");
+            } catch {
+              return;
+            }
+            if (!list.length) {
+              toast("Watchlist is empty.", "error");
+              return;
+            }
+            try {
+              const results = await api("/candidates/evaluate", {
+                method: "POST",
+                body: JSON.stringify({ symbols: list }),
+              });
+              document.getElementById("wl-trace-results").innerHTML = results
+                .map(renderTrace)
+                .join("");
+            } catch {}
+          }),
+        );
+
+        /* ---------------- THEMES ---------------- */
+        async function loadThemes() {
+          const el = document.getElementById("th-list");
+          el.innerHTML = '<div class="empty-note">Loading…</div>';
+          let themes = [];
+          try {
+            themes = await api("/themes");
+          } catch {
+            el.innerHTML =
+              '<div class="empty-note">Couldn\'t load themes.</div>';
+            return;
+          }
+          if (!themes.length) {
+            el.innerHTML =
+              '<div class="empty-note">No themes tracked yet. Add one above.</div>';
+            return;
+          }
+          el.innerHTML = themes
+            .map(
+              (t) => `
+      <div class="card" style="margin-bottom:12px;">
+        <div class="row-between">
+          <div>
+            <div style="font-family:var(--mono); font-weight:600; font-size:14px;">${esc(t.name)}</div>
+            <div class="trace-sub" style="margin-top:4px;">watching: ${t.symbols.map(esc).join(", ") || "—"}</div>
+          </div>
+          <div class="row" style="gap:6px;">
+            <button class="btn btn-sm th-hist" data-name="${esc(t.name)}">History</button>
+            <button class="btn btn-sm btn-danger th-del" data-name="${esc(t.name)}">Delete</button>
+          </div>
+        </div>
+        <div class="trace-sub" style="margin-top:8px;">keywords: ${t.keywords.map(esc).join(", ") || "—"}</div>
+        <div class="th-history" id="th-history-${esc(t.name)}" style="margin-top:10px;"></div>
+      </div>`,
+            )
+            .join("");
+          el.querySelectorAll(".th-del").forEach((btn) =>
+            btn.addEventListener("click", async () => {
+              if (!confirm(`Stop tracking theme "${btn.dataset.name}"?`))
+                return;
+              try {
+                await api(`/themes/${encodeURIComponent(btn.dataset.name)}`, {
+                  method: "DELETE",
+                });
+                loadThemes();
+              } catch {}
+            }),
+          );
+          el.querySelectorAll(".th-hist").forEach((btn) =>
+            btn.addEventListener(
+              "click",
+              withLoading(btn, async () => {
+                const target = document.getElementById(
+                  `th-history-${btn.dataset.name}`,
+                );
+                try {
+                  const events = await api(
+                    `/themes/${encodeURIComponent(btn.dataset.name)}/history`,
+                  );
+                  if (!events.length) {
+                    target.innerHTML =
+                      '<div class="empty-note">No checks logged yet — the scanner runs on its own interval.</div>';
+                    return;
+                  }
+                  target.innerHTML =
+                    '<div class="timeline">' +
+                    events
+                      .map(
+                        (e) => `
+          <div class="timeline-row">
+            <span class="timeline-time">${fmtDate(e.recorded_at)}</span>
+            <span class="tag ${e.relevance >= 0.6 ? "tag-warn" : "tag-neutral"}">${(e.relevance * 100).toFixed(0)}%</span>
+            <span class="timeline-body">${esc(e.summary)}${e.symbols.length ? ` <span class="trace-sub" style="margin:0;">(${e.symbols.map(esc).join(", ")})</span>` : ""}</span>
+          </div>`,
+                      )
+                      .join("") +
+                    "</div>";
+                } catch {}
+              }),
+            ),
+          );
+        }
+        document.getElementById("th-add").addEventListener(
+          "click",
+          withLoading(document.getElementById("th-add"), async () => {
+            const name = document.getElementById("th-name").value.trim();
+            const keywords = document
+              .getElementById("th-keywords")
+              .value.split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            const symbols = document
+              .getElementById("th-symbols")
+              .value.split(",")
+              .map((s) => s.trim().toUpperCase())
+              .filter(Boolean);
+            if (!name || !keywords.length) {
+              toast("Give the theme a name and at least one keyword.", "error");
+              return;
+            }
+            try {
+              await api("/themes", {
+                method: "POST",
+                body: JSON.stringify({ name, keywords, symbols }),
+              });
+              toast(`Tracking "${name}".`, "success");
+              document.getElementById("th-name").value = "";
+              document.getElementById("th-keywords").value = "";
+              document.getElementById("th-symbols").value = "";
+              loadThemes();
+            } catch {}
+          }),
+        );
+
+        /* ---------------- BACKTEST ---------------- */
+        document.getElementById("bt-import-btn").addEventListener(
+          "click",
+          withLoading(document.getElementById("bt-import-btn"), async () => {
+            const symbol = document
+              .getElementById("bt-symbol")
+              .value.trim()
+              .toUpperCase();
+            const prices = document
+              .getElementById("bt-import")
+              .value.split(",")
+              .map((s) => parseFloat(s.trim()))
+              .filter((n) => !Number.isNaN(n));
+            if (!symbol || prices.length < 2) {
+              toast("Enter a symbol and at least two prices.", "error");
+              return;
+            }
+            try {
+              const count = await api(
+                `/backtest/${encodeURIComponent(symbol)}/import`,
+                { method: "POST", body: JSON.stringify({ prices }) },
+              );
+              toast(`Imported ${count} prices for ${symbol}.`, "success");
+            } catch {}
+          }),
+        );
+        document.getElementById("bt-backfill-btn").addEventListener(
+          "click",
+          withLoading(document.getElementById("bt-backfill-btn"), async () => {
+            const symbol = document
+              .getElementById("bt-symbol")
+              .value.trim()
+              .toUpperCase();
+            const days =
+              parseInt(document.getElementById("bt-backfill-days").value, 10) ||
+              100;
+            if (!symbol) {
+              toast("Enter a symbol first.", "error");
+              return;
+            }
+            try {
+              const count = await api(
+                `/backfill/${encodeURIComponent(symbol)}`,
+                { method: "POST", body: JSON.stringify({ days }) },
+              );
+              toast(
+                `Backfilled ${count} real bars for ${symbol} via Twelve Data.`,
+                "success",
+              );
+            } catch {}
+          }),
+        );
+        document.getElementById("bt-run").addEventListener(
+          "click",
+          withLoading(document.getElementById("bt-run"), async () => {
+            const symbol = document
+              .getElementById("bt-symbol")
+              .value.trim()
+              .toUpperCase();
+            const entry_price = parseFloat(
+              document.getElementById("bt-entry").value,
+            );
+            const trailing_stop_pct = parseFloat(
+              document.getElementById("bt-stop").value,
+            );
+            const take_profit_ladder = parseLadder(
+              document.getElementById("bt-ladder").value,
+            );
+            const out = document.getElementById("bt-result");
+            if (!symbol || Number.isNaN(entry_price)) {
+              toast("Enter a symbol and entry price.", "error");
+              return;
+            }
+            try {
+              const body = { entry_price };
+              if (!Number.isNaN(trailing_stop_pct))
+                body.trailing_stop_pct = trailing_stop_pct;
+              body.take_profit_ladder = take_profit_ladder;
+              const r = await api(`/backtest/${encodeURIComponent(symbol)}`, {
+                method: "POST",
+                body: JSON.stringify(body),
+              });
+              const maxAbs = Math.max(
+                Math.abs(r.strategy_return_pct),
+                Math.abs(r.buy_and_hold_return_pct),
+                1,
+              );
+              const bar = (label, val, color) => `
+        <div class="bar-compare-row">
+          <span class="bar-compare-label">${label}</span>
+          <div class="bar-compare-track"><div class="bar-compare-fill" style="width:${Math.min(100, (Math.abs(val) / maxAbs) * 100)}%; background:${color};"></div></div>
+          <span class="bar-compare-val" style="color:${color}">${val >= 0 ? "+" : ""}${fmt(val, 1)}%</span>
+        </div>`;
+              out.innerHTML = `
+        <div class="bar-compare">
+          ${bar("Strategy", r.strategy_return_pct, "var(--teal)")}
+          ${bar("Buy &amp; hold", r.buy_and_hold_return_pct, "var(--ink-faint)")}
+        </div>
+        <div class="trace-sub" style="margin-top:10px;">max drawdown ${fmt(r.max_drawdown_pct, 1)}% &middot; ${r.data_points} data points &middot; ${fmt(r.still_holding_fraction * 100, 0)}% still held</div>
+        ${
+          r.events.length
+            ? `<div class="timeline" style="margin-top:12px;">${r.events
+                .map(
+                  (e) => `
+          <div class="timeline-row" style="grid-template-columns:70px 90px 1fr;">
+            <span class="timeline-time">#${e.index}</span>
+            <span class="tag ${e.action === "sell_all" ? "tag-danger" : "tag-warn"}">${esc(e.action)}</span>
+            <span class="timeline-body">${esc(e.detail)} <span class="trace-sub" style="margin:0;">@ ${fmt(e.price)}</span></span>
+          </div>`,
+                )
+                .join("")}</div>`
+            : '<div class="empty-note" style="padding:10px 0 0;">No exit triggered — held the whole way.</div>'
+        }`;
+            } catch {}
+          }),
+        );
+        document.getElementById("sw-run").addEventListener(
+          "click",
+          withLoading(document.getElementById("sw-run"), async () => {
+            const symbol = document
+              .getElementById("bt-symbol")
+              .value.trim()
+              .toUpperCase();
+            const entry_price = parseFloat(
+              document.getElementById("sw-entry").value,
+            );
+            const stop_pcts = document
+              .getElementById("sw-stops")
+              .value.split(",")
+              .map((s) => parseFloat(s.trim()))
+              .filter((n) => !Number.isNaN(n));
+            const out = document.getElementById("sw-result");
+            if (!symbol || Number.isNaN(entry_price) || !stop_pcts.length) {
+              toast(
+                "Enter a symbol, entry price, and at least one stop %.",
+                "error",
+              );
+              return;
+            }
+            try {
+              const results = await api(
+                `/backtest/${encodeURIComponent(symbol)}/sweep`,
+                {
+                  method: "POST",
+                  body: JSON.stringify({ entry_price, stop_pcts }),
+                },
+              );
+              out.innerHTML = `<table><thead><tr><th>Stop%</th><th>Ladder</th><th class="num">Return</th><th class="num">Max DD</th><th class="num">Score</th></tr></thead><tbody>${results
+                .map(
+                  (r, i) => `
+          <tr style="${i === 0 ? "background:var(--amber-glow);" : ""}">
+            <td>${fmt(r.trailing_stop_pct, 0)}%</td>
+            <td>${r.take_profit_ladder.length ? r.take_profit_ladder.map(([g, f]) => `${g}:${f}`).join(" ") : "none"}</td>
+            <td class="num">${r.strategy_return_pct >= 0 ? "+" : ""}${fmt(r.strategy_return_pct, 1)}%</td>
+            <td class="num">${fmt(r.max_drawdown_pct, 1)}%</td>
+            <td class="num">${fmt(r.risk_adjusted_score, 2)}</td>
+          </tr>`,
+                )
+                .join(
+                  "",
+                )}</tbody></table><div class="trace-sub" style="margin-top:8px;">ranked by return &divide; |max drawdown| &mdash; top row highlighted</div>`;
+            } catch {}
+          }),
+        );
+
+        /* ---------------- RISK ---------------- */
+        document.getElementById("rk-run").addEventListener(
+          "click",
+          withLoading(document.getElementById("rk-run"), async () => {
+            const account_equity = parseFloat(
+              document.getElementById("rk-equity").value,
+            );
+            const risk_pct = parseFloat(
+              document.getElementById("rk-pct").value,
+            );
+            const entry_price = parseFloat(
+              document.getElementById("rk-entry").value,
+            );
+            const stop_price = parseFloat(
+              document.getElementById("rk-stop").value,
+            );
+            const out = document.getElementById("rk-result");
+            if (
+              [account_equity, risk_pct, entry_price, stop_price].some(
+                Number.isNaN,
+              )
+            ) {
+              toast("Fill in every field.", "error");
+              return;
+            }
+            try {
+              const r = await api("/risk/position-size", {
+                method: "POST",
+                body: JSON.stringify({
+                  account_equity,
+                  risk_pct,
+                  entry_price,
+                  stop_price,
+                }),
+              });
+              out.innerHTML = `
+        <div class="card-title">Result</div>
+        <div class="stat">${fmt(r.shares, 0)} shares</div>
+        <div class="stat-sub">≈ ${fmt(r.position_value)} &middot; ${fmt(r.position_pct_of_account, 1)}% of account</div>
+        <div class="divider"></div>
+        <div class="row-between"><span class="trace-sub" style="margin:0;">Risk amount</span><span style="font-family:var(--mono);">${fmt(r.risk_amount)}</span></div>
+        <div class="row-between" style="margin-top:6px;"><span class="trace-sub" style="margin:0;">Risk per share</span><span style="font-family:var(--mono);">${fmt(r.risk_per_share)}</span></div>
+        ${r.warning ? `<div class="banner banner-warn" style="margin-top:14px; margin-bottom:0;">${esc(r.warning)}</div>` : ""}`;
+            } catch {}
+          }),
+        );
+
+        /* ---------------- LOOKUP ---------------- */
+        async function runLookup() {
+          const symbol = document
+            .getElementById("lk-symbol")
+            .value.trim()
+            .toUpperCase();
+          if (!symbol) {
+            toast("Enter a symbol.", "error");
+            return;
+          }
+
+          const histEl = document.getElementById("lk-history");
+          histEl.innerHTML = '<div class="empty-note">Loading…</div>';
+          try {
+            const hist = await api(
+              `/history/${encodeURIComponent(symbol)}?limit=200`,
+            );
+            histEl.innerHTML = sparkline(hist);
+          } catch {
+            histEl.innerHTML =
+              '<div class="empty-note">Couldn\'t load history.</div>';
+          }
+
+          const fundEl = document.getElementById("lk-fundamentals");
+          fundEl.innerHTML = '<div class="empty-note">Loading…</div>';
+          try {
+            const [fund, peers] = await Promise.all([
+              api(`/fundamentals/${encodeURIComponent(symbol)}`).catch(
+                () => null,
+              ),
+              api(`/peers/${encodeURIComponent(symbol)}`).catch(() => null),
+            ]);
+            let html = "";
+            if (fund) {
+              html += `<div class="grid grid-2" style="gap:10px;">
+          <div><div class="trace-sub" style="margin:0;">P/E (TTM)</div><div style="font-family:var(--mono);">${fund.pe_ttm != null ? fmt(fund.pe_ttm, 1) : "—"}</div></div>
+          <div><div class="trace-sub" style="margin:0;">Beta</div><div style="font-family:var(--mono);">${fund.beta != null ? fmt(fund.beta, 2) : "—"}</div></div>
+          <div><div class="trace-sub" style="margin:0;">52wk high</div><div style="font-family:var(--mono);">${fund.week52_high != null ? fmt(fund.week52_high) : "—"}</div></div>
+          <div><div class="trace-sub" style="margin:0;">52wk low</div><div style="font-family:var(--mono);">${fund.week52_low != null ? fmt(fund.week52_low) : "—"}</div></div>
+        </div>`;
+            } else {
+              html +=
+                '<div class="empty-note">Fundamentals need a Finnhub key configured on the server.</div>';
+            }
+            if (peers && peers.length) {
+              html += `<div class="divider"></div><div class="trace-sub" style="margin:0 0 8px;">Peers</div><div class="row">${peers.map((p) => `<span class="chip">${esc(p)}</span>`).join("")}</div>`;
+            }
+            fundEl.innerHTML = html;
+          } catch {
+            fundEl.innerHTML =
+              '<div class="empty-note">Couldn\'t load fundamentals.</div>';
+          }
+
+          const evalEl = document.getElementById("lk-evals");
+          evalEl.innerHTML = '<div class="empty-note">Loading…</div>';
+          try {
+            const evals = await api(
+              `/evaluations/${encodeURIComponent(symbol)}`,
+            );
+            if (!evals.length) {
+              evalEl.innerHTML =
+                '<div class="empty-note">No evaluation history yet for this symbol.</div>';
+              return;
+            }
+            evalEl.innerHTML =
+              '<div class="timeline">' +
+              evals
+                .map((e) => {
+                  const meta = verdictMeta({ verdict: e.verdict });
+                  return `<div class="timeline-row">
+          <span class="timeline-time">${fmtDate(e.recorded_at)}</span>
+          <span class="tag tag-${meta.tone}">${meta.label}</span>
+          <span class="timeline-body">${e.trace && e.trace.length ? e.trace.map((t) => esc(t.label)).join(", ") : "—"}</span>
+        </div>`;
+                })
+                .join("") +
+              "</div>";
+          } catch {
+            evalEl.innerHTML =
+              '<div class="empty-note">Couldn\'t load evaluation history.</div>';
+          }
+        }
+        document
+          .getElementById("lk-go")
+          .addEventListener(
+            "click",
+            withLoading(document.getElementById("lk-go"), runLookup),
+          );
+        document
+          .getElementById("lk-symbol")
+          .addEventListener("keydown", (e) => {
+            if (e.key === "Enter") runLookup();
+          });
+
+        /* ---------------- SETTINGS ---------------- */
+        function renderSettings() {
+          document.getElementById("set-api").value = state.apiBase;
+          document.getElementById("set-token").value = state.token;
+        }
+        document.getElementById("set-save").addEventListener("click", () => {
+          state.apiBase = document.getElementById("set-api").value.trim();
+          state.token = document.getElementById("set-token").value.trim();
+          localStorage.setItem(LS_API, state.apiBase);
+          localStorage.setItem(LS_TOKEN, state.token);
+          toast("Saved.", "success");
+          refreshBreaker();
+        });
+        document.getElementById("set-test").addEventListener(
+          "click",
+          withLoading(document.getElementById("set-test"), async () => {
+            state.apiBase = document.getElementById("set-api").value.trim();
+            const statusEl = document.getElementById("set-status");
+            if (!state.apiBase) {
+              toast("Enter an API URL first.", "error");
+              return;
+            }
+            try {
+              const url = state.apiBase.replace(/\/+$/, "") + "/health";
+              const res = await fetch(url);
+              if (res.ok) {
+                setConn(true);
+                statusEl.innerHTML =
+                  '<div class="banner" style="background:var(--teal-glow); border-color:rgba(79,191,159,.35); color:var(--teal);">Connected — /health responded OK.</div>';
+              } else {
+                setConn(false);
+                statusEl.innerHTML = `<div class="banner banner-danger">Server responded with ${res.status}.</div>`;
+              }
+            } catch {
+              setConn(false);
+              statusEl.innerHTML =
+                '<div class="banner banner-danger">Could not reach that URL. Check it\'s correct, the server is running, and CORS is allowed.</div>';
+            }
+          }),
+        );
+
+        /* ---------------- boot ---------------- */
+        function boot() {
+          renderSettings();
+          if (!state.apiBase) {
+            document.getElementById("ov-config-banner").innerHTML =
+              '<div class="banner banner-warn">No API URL configured yet. Head to <a href="#settings" onclick="return false;" id="ov-goto-settings">Settings</a> to connect this panel to your stock-sentinel server.</div>';
+            const link = document.getElementById("ov-goto-settings");
+            if (link)
+              link.addEventListener("click", () => showPanel("settings"));
+          }
+          const initial = (location.hash || "").replace("#", "") || "overview";
+          showPanel(initial);
+          if (state.apiBase) refreshBreaker();
+        }
+        boot();
+      })();
+    </script>
+  </body>
+</html>

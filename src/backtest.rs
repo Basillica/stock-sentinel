@@ -48,7 +48,11 @@ pub fn run(prices: &[f64], entry_price: f64, cfg: &StrategyConfig) -> BacktestRe
     for (i, &price) in prices.iter().enumerate() {
         last_price = price;
         pos.record_price(price);
-        let eval = evaluate(&pos, price, cfg);
+        // Backtests here only carry close prices, so there's no real ATR
+        // to feed in - an atr_stop_multiplier config will silently fall
+        // back to the flat trailing_stop_pct (evaluate() guarantees this).
+        // Extending backtest to accept OHLC bars would close this gap.
+        let eval = evaluate(&pos, price, cfg, None);
 
         match eval.signal {
             Signal::SellAll { reason } => {

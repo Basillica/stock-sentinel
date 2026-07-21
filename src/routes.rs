@@ -36,6 +36,26 @@ pub async fn add_position(
     Ok(Json(pos))
 }
 
+pub async fn add_positions(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<Vec<AddPositionRequest>>,
+) -> Result<Json<Vec<Position>>, StatusCode> {
+    let mut pos = vec![];
+    for position in req {
+        let symbol = position.symbol.to_uppercase();
+        let p = Position::new(symbol.clone(), position.entry_price, position.quantity);
+        state
+            .db
+            .upsert_position(p.clone())
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        state.positions.insert(symbol, p.clone());
+        pos.insert(pos.len(), p);
+    }
+
+    Ok(Json(pos))
+}
+
 pub async fn list_positions(State(state): State<Arc<AppState>>) -> Json<Vec<Position>> {
     Json(state.positions.iter().map(|e| e.value().clone()).collect())
 }
@@ -73,8 +93,14 @@ pub async fn get_signal(
         .ok_or(StatusCode::NOT_FOUND)?;
     entry.record_price(quote.price);
 
-    let cfg = StrategyConfig::default();
-    let eval = evaluate(&entry, quote.price, &cfg);
+    let cfg = state.default_strategy.clone();
+    let real_atr = state
+        .db
+        .latest_real_atr(symbol.clone(), 14)
+        .await
+        .ok()
+        .flatten();
+    let eval = evaluate(&entry, quote.price, &cfg, real_atr);
     Ok(Json(eval))
 }
 
@@ -102,13 +128,56 @@ pub async fn get_full_signal(
         entry.clone()
     };
 
-    let cfg = StrategyConfig::default();
+    let cfg = state.default_strategy.clone();
+    let real_atr = state
+        .db
+        .latest_real_atr(symbol.clone(), 14)
+        .await
+        .ok()
+        .flatten();
     let result = state
         .pipeline
-        .run_position(&snapshot, quote.price, &cfg)
+        .run_position(&snapshot, quote.price, &cfg, real_atr)
         .await;
     let _ = state.db.log_evaluation(&result).await;
     Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+pub struct BackfillRequest {
+    pub days: Option<usize>,
+}
+
+/// Pulls real daily OHLC history from Twelve Data (if configured), stores
+/// it, and seeds `price_history` closes from it too - so RSI/SMA/MACD get
+/// an immediate head start instead of waiting on live polling to
+/// accumulate, and a real ATR becomes available for `atr_stop_multiplier`.
+pub async fn backfill(
+    State(state): State<Arc<AppState>>,
+    Path(symbol): Path<String>,
+    Json(req): Json<BackfillRequest>,
+) -> Result<Json<usize>, StatusCode> {
+    let provider = state
+        .twelvedata
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let symbol = symbol.to_uppercase();
+    let bars = provider
+        .daily_history(&symbol, req.days.unwrap_or(100))
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    if bars.is_empty() {
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+    let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
+    let count = bars.len();
+    state
+        .db
+        .upsert_ohlc_bars(symbol.clone(), bars)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let _ = state.db.import_price_series(symbol, closes).await;
+    Ok(Json(count))
 }
 
 #[derive(Deserialize)]
@@ -148,10 +217,10 @@ pub struct WatchlistRequest {
     pub symbol: String,
 }
 
-#[derive(Serialize)]
-pub struct WatchlistEntry {
-    pub symbol: String,
-}
+// #[derive(Serialize)]
+// pub struct WatchlistEntry {
+//     pub symbol: String,
+// }
 
 /// Add a symbol to the always-scanned watchlist. Picked up by the scanner
 /// on its next cycle - no restart needed.

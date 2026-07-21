@@ -5,6 +5,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension};
 use std::sync::{Arc, Mutex};
 
+mod signal;
+
 /// rusqlite::Connection is not Send-across-await-friendly to hold inside an
 /// async fn directly, so every call goes through `run`, which hops onto a
 /// blocking thread. That keeps SQLite (which is inherently synchronous and
@@ -72,6 +74,23 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_theme_log_theme
                 ON theme_log(theme, recorded_at);
+            CREATE TABLE IF NOT EXISTS digest_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                overview     TEXT NOT NULL,
+                items_json   TEXT NOT NULL,
+                generated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_digest_log_time
+                ON digest_log(generated_at);
+            CREATE TABLE IF NOT EXISTS ohlc_bars (
+                symbol TEXT NOT NULL,
+                date   TEXT NOT NULL,
+                open   REAL NOT NULL,
+                high   REAL NOT NULL,
+                low    REAL NOT NULL,
+                close  REAL NOT NULL,
+                PRIMARY KEY (symbol, date)
+            );
             ",
         )
         .context("failed to run schema migration")?;
@@ -435,6 +454,115 @@ impl Db {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                 ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    // --- Real OHLC bars (Twelve Data backfill) ---
+
+    pub async fn upsert_ohlc_bars(
+        &self,
+        symbol: String,
+        bars: Vec<crate::data::twelvedata::OhlcBar>,
+    ) -> Result<usize> {
+        let count = bars.len();
+        self.run(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            for bar in &bars {
+                tx.execute(
+                    "INSERT INTO ohlc_bars (symbol, date, open, high, low, close) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     ON CONFLICT(symbol, date) DO UPDATE SET
+                        open = excluded.open, high = excluded.high, low = excluded.low, close = excluded.close",
+                    rusqlite::params![symbol, bar.date, bar.open, bar.high, bar.low, bar.close],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+        Ok(count)
+    }
+
+    /// Oldest-first, up to `limit` most recent bars.
+    pub async fn recent_ohlc(
+        &self,
+        symbol: String,
+        limit: usize,
+    ) -> Result<Vec<crate::data::twelvedata::OhlcBar>> {
+        self.run(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT date, open, high, low, close FROM ohlc_bars
+                 WHERE symbol = ?1 ORDER BY date DESC LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![symbol, limit as i64], |row| {
+                Ok(crate::data::twelvedata::OhlcBar {
+                    date: row.get(0)?,
+                    open: row.get(1)?,
+                    high: row.get(2)?,
+                    low: row.get(3)?,
+                    close: row.get(4)?,
+                })
+            })?;
+            let mut out: Vec<crate::data::twelvedata::OhlcBar> = rows.collect::<Result<_, _>>()?;
+            out.reverse(); // queried newest-first, callers want oldest-first
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Convenience: fetch stored OHLC bars for a symbol and compute a real
+    /// ATR from them (`indicators::atr`), or `None` if there isn't enough
+    /// backfilled history yet. This is what `evaluate()`'s `real_atr`
+    /// parameter is meant to be fed from.
+    pub async fn latest_real_atr(&self, symbol: String, period: usize) -> Result<Option<f64>> {
+        let bars = self.recent_ohlc(symbol, period + 5).await?;
+        let highs: Vec<f64> = bars.iter().map(|b| b.high).collect();
+        let lows: Vec<f64> = bars.iter().map(|b| b.low).collect();
+        let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
+        Ok(crate::indicators::atr(&highs, &lows, &closes, period))
+    }
+
+    // --- Global market digest ---
+
+    pub async fn log_digest(&self, overview: String, items_json: String) -> Result<()> {
+        self.run(move |conn| {
+            conn.execute(
+                "INSERT INTO digest_log (overview, items_json, generated_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![overview, items_json, Utc::now().to_rfc3339()],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// (overview, items_json, generated_at) for the most recent digest,
+    /// or `None` if none has run yet.
+    pub async fn latest_digest(&self) -> Result<Option<(String, String, String)>> {
+        self.run(|conn| {
+            conn.query_row(
+                "SELECT overview, items_json, generated_at FROM digest_log ORDER BY generated_at DESC LIMIT 1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            )
+            .optional()
+            .map_err(Into::into)
+        })
+        .await
+    }
+
+    pub async fn recent_digests(&self, limit: usize) -> Result<Vec<(String, String, String)>> {
+        self.run(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT overview, items_json, generated_at FROM digest_log ORDER BY generated_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map([limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
             })?;
             let mut out = Vec::new();
             for row in rows {

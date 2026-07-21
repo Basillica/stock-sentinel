@@ -167,9 +167,10 @@ impl Pipeline {
         position: &Position,
         current_price: f64,
         cfg: &StrategyConfig,
+        real_atr: Option<f64>,
     ) -> PipelineResult {
         let mut trace = Vec::new();
-        let tech_eval = evaluate_technical(position, current_price, cfg);
+        let tech_eval = evaluate_technical(position, current_price, cfg, real_atr);
         trace.push(Evidence {
             source: "technical".into(),
             label: "risk check".into(),

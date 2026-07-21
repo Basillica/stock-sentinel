@@ -1,7 +1,7 @@
+use crate::notifier::format_alert;
 use crate::pipeline::{apply_circuit_breaker, Verdict};
 use crate::portfolio::Position;
 use crate::state::AppState;
-use crate::strategy::StrategyConfig;
 use anyhow::Result;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -28,27 +28,40 @@ impl Default for ScannerConfig {
     }
 }
 
-/// Runs forever: every `interval`, re-reads the current ticker list and
-/// scans all of it in parallel. Because the list is re-read each cycle
-/// (not captured once at startup), adding or removing a position or
-/// watchlist symbol via the API takes effect on the very next tick -
-/// no restart needed.
-pub async fn run_scanner_loop(state: Arc<AppState>, cfg: ScannerConfig) {
+/// Runs until `shutdown` is signalled: every `interval`, re-reads the
+/// current ticker list and scans all of it in parallel. Because the list
+/// is re-read each cycle (not captured once at startup), adding or
+/// removing a position or watchlist symbol via the API takes effect on
+/// the very next tick - no restart needed.
+///
+/// Selects between the interval tick and the shutdown signal so a
+/// SIGTERM/Ctrl+C doesn't have to wait out a full scan interval, and so
+/// `main.rs` can `.await` this task to completion instead of aborting it
+/// mid-cycle.
+pub async fn run_scanner_loop(
+    state: Arc<AppState>,
+    cfg: ScannerConfig,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
     let mut ticker = tokio::time::interval(cfg.interval);
     // Fire the first scan immediately rather than waiting a full interval.
     ticker.tick().await;
     loop {
-        ticker.tick().await;
-        let started = std::time::Instant::now();
-        match scan_once(&state, cfg.max_concurrent_scans).await {
-            Ok(count) => tracing::info!(
-                "scan cycle done: {count} tickers in {:?}",
-                started.elapsed()
-            ),
-            Err(e) => tracing::error!("scan cycle failed: {e:?}"),
-        }
-        if let Err(e) = scan_themes(&state).await {
-            tracing::error!("theme scan failed: {e:?}");
+        tokio::select! {
+            _ = ticker.tick() => {
+                let started = std::time::Instant::now();
+                match scan_once(&state, cfg.max_concurrent_scans).await {
+                    Ok(count) => tracing::info!("scan cycle done: {count} tickers in {:?}", started.elapsed()),
+                    Err(e) => tracing::error!("scan cycle failed: {e:?}"),
+                }
+                if let Err(e) = scan_themes(&state).await {
+                    tracing::error!("theme scan failed: {e:?}");
+                }
+            }
+            _ = shutdown.changed() => {
+                tracing::info!("scanner loop received shutdown signal, exiting cleanly");
+                return;
+            }
         }
     }
 }
@@ -157,7 +170,13 @@ async fn update_circuit_breaker(state: &Arc<AppState>, total_value: f64) {
                 "🛑 *Portfolio circuit breaker tripped*\n{:.1}% drawdown from peak ({:.2} vs peak {:.2}). New candidate buys are suppressed until this recovers.",
                 drawdown_pct, current, peak
             );
-            let _ = notifier.send(&text).await;
+            if let Err(e) = notifier.send(&text).await {
+                tracing::error!(
+                    "unable to send tripper circuit breaker. error: {:?} | message: {}",
+                    e,
+                    text,
+                )
+            }
         }
     } else if !should_trip && was_tripped {
         tracing::info!(
@@ -168,7 +187,13 @@ async fn update_circuit_breaker(state: &Arc<AppState>, total_value: f64) {
             let text = format!(
                 "✅ *Portfolio circuit breaker cleared* - drawdown now {drawdown_pct:.1}%."
             );
-            let _ = notifier.send(&text).await;
+            if let Err(e) = notifier.send(&text).await {
+                tracing::error!(
+                    "unable to send tripper circuit breaker. error: {:?} | message: {}",
+                    e,
+                    text,
+                )
+            }
         }
     }
 }
@@ -197,10 +222,16 @@ async fn scan_position(state: &Arc<AppState>, symbol: &str) -> Result<f64> {
     state.db.upsert_position(snapshot.clone()).await?;
     let market_value = snapshot.quantity * quote.price;
 
-    let cfg = StrategyConfig::default();
+    let cfg = state.default_strategy.clone();
+    let real_atr = state
+        .db
+        .latest_real_atr(symbol.to_string(), 14)
+        .await
+        .ok()
+        .flatten();
     let result = state
         .pipeline
-        .run_position(&snapshot, quote.price, &cfg)
+        .run_position(&snapshot, quote.price, &cfg, real_atr)
         .await;
     state.db.log_evaluation(&result).await?;
 
@@ -216,10 +247,11 @@ async fn scan_position(state: &Arc<AppState>, symbol: &str) -> Result<f64> {
         Verdict::Watch { .. } => tracing::info!(symbol, "watch: news risk flag raised"),
         _ => {}
     }
+
     if let Some(notifier) = &state.notifier {
-        if let Some(text) = crate::telegram::format_alert(symbol, &result.verdict) {
-            if let Err(e) = notifier.send(&text).await {
-                tracing::warn!(symbol, "failed to send Telegram alert: {e:?}");
+        if let Some(message) = format_alert(&symbol, &result.verdict) {
+            if let Err(e) = notifier.send(&message).await {
+                tracing::warn!(symbol, "failed to send alert: {e:?}");
             }
         }
     }
@@ -247,10 +279,11 @@ async fn scan_candidate(state: &Arc<AppState>, symbol: &str) -> Result<()> {
     if let Verdict::Buy { confidence } = &result.verdict {
         tracing::info!(symbol, "candidate BUY signal, confidence {confidence:.2}");
     }
+
     if let Some(notifier) = &state.notifier {
-        if let Some(text) = crate::telegram::format_alert(symbol, &result.verdict) {
-            if let Err(e) = notifier.send(&text).await {
-                tracing::warn!(symbol, "failed to send Telegram alert: {e:?}");
+        if let Some(message) = format_alert(&symbol, &result.verdict) {
+            if let Err(e) = notifier.send(&message).await {
+                tracing::warn!(symbol, "failed to send alert: {e:?}");
             }
         }
     }

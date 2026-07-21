@@ -1,10 +1,10 @@
 ### Variables
-@baseUrl = https://stock-sentinel-9wq1.onrender.com 
-## http://localhost:8080
+@baseUrl = http://localhost:8080
+## https://stock-sentinel-9wq1.onrender.com 
 @symbol = AMAT
 
 ### Health Check
-GET {{baseUrl}}/health
+GET {{baseUrl}}
 
 ### Create a Position
 POST {{baseUrl}}/positions
@@ -16,16 +16,34 @@ Content-Type: application/json
   "quantity": 10
 }
 
+### Create Positions
+POST {{baseUrl}}/positions
+Content-Type: application/json
+
+[
+    {
+        "symbol": "AMAT",
+        "entry_price": 529.66,
+        "quantity": 10
+    }
+]
+
 ### Get All Positions
 GET {{baseUrl}}/positions
+Content-Type: application/json
+Authorization: Bearer someboringauthtoken
 
 ### Get Fast Signal
 # Technical rules only. High frequency polling.
 GET {{baseUrl}}/positions/{{symbol}}/signal
+Content-Type: application/json
+Authorization: Bearer someboringauthtoken
 
 ### Get Full Signal
 # Slow: Technical + News + LLM analysis. Poll every 15-30 minutes.
 GET {{baseUrl}}/positions/{{symbol}}/full-signal
+Content-Type: application/json
+Authorization: Bearer someboringauthtoken
 
 ### Evaluate Candidates
 # Screen potential buys
@@ -38,3 +56,8 @@ Content-Type: application/json
 
 ### Delete a Position
 DELETE {{baseUrl}}/positions/{{symbol}}
+
+### Portofolio status
+GET {{baseUrl}}/portfolio/status
+Content-Type: application/json
+Authorization: Bearer someboringauthtoken

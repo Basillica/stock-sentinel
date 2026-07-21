@@ -1,10 +1,14 @@
+mod ai;
+mod analysis;
 mod auth;
 mod backtest;
 mod data;
 mod db;
 mod finnhub_extra;
 mod indicators;
+mod macros;
 mod news;
+mod notifier;
 mod ollama;
 mod pipeline;
 mod portfolio;
@@ -14,9 +18,11 @@ mod routes;
 mod scanner;
 mod state;
 mod strategy;
-mod telegram;
 mod themes;
 
+use crate::data::twelvedata::TwelveDataProvider;
+use crate::ratelimit::RateLimiter;
+use crate::strategy::StrategyConfig;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use data::{FinnhubProvider, MockProvider};
@@ -27,6 +33,7 @@ use ollama::OllamaClient;
 use pipeline::Pipeline;
 use scanner::ScannerConfig;
 use state::AppState;
+use std::env;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,7 +42,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 fn env_var<T: std::str::FromStr>(name: &str, default: T) -> T {
-    std::env::var(name)
+    env::var(name)
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
@@ -44,10 +51,24 @@ fn env_var<T: std::str::FromStr>(name: &str, default: T) -> T {
 #[tokio::main]
 async fn main() {
     dotenv().ok();
+
+    let ticker = analysis::technical::TickerConfig {
+        symbol: "AMAT".to_string(),
+        is_owned: true,      // Switched to true to demonstrate active trade management
+        entry_price: 415.00, // Example of a past successful Alpha Matrix entry
+        highest_tracked_price: 739.67, // The actual 52-week high for AMAT to measure the drawdown
+        current_price: 525.70, // The current active price
+        rsi: 42.5, // Reflects the recent price drop (cooling off, but not yet < 30 oversold)
+        sentiment: 0.85, // Highly positive based on strong Wall Street consensus ratings
+        latest_signal: "HOLD: No high-probability setup detected.".to_string(),
+        shares: 100.0,
+        half_profit_taken: false,
+    };
+    analysis::technical::run_orchestrator(ticker).await;
+
     tracing_subscriber::fmt()
         .with_env_filter(
-            std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "stock_sentinel=info,tower_http=info".into()),
+            env::var("RUST_LOG").unwrap_or_else(|_| "stock_sentinel=info,tower_http=info".into()),
         )
         .init();
 
@@ -61,9 +82,7 @@ async fn main() {
         Duration::from_secs(60),
     ));
 
-    let finnhub_key = std::env::var("FINNHUB_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty());
+    let finnhub_key = env::var("FINNHUB_API_KEY").ok().filter(|k| !k.is_empty());
 
     let provider: Box<dyn data::MarketDataProvider> = match &finnhub_key {
         Some(key) => {
@@ -91,25 +110,28 @@ async fn main() {
         ))
     });
 
-    let notifier: Option<Arc<telegram::TelegramNotifier>> = match (
-        std::env::var("TELEGRAM_BOT_TOKEN"),
-        std::env::var("TELEGRAM_CHAT_ID"),
-    ) {
-        (Ok(token), Ok(chat_id)) if !token.is_empty() && !chat_id.is_empty() => {
-            tracing::info!("Telegram alerts enabled");
-            Some(Arc::new(telegram::TelegramNotifier::new(token, chat_id)))
-        }
-        _ => {
-            tracing::info!(
-                "TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set - alerts will only go to logs"
-            );
-            None
-        }
-    };
+    // Twelve Data: free-tier alternative for real OHLC history, since
+    // Finnhub's /stock/candle is premium-only (confirmed against the
+    // swagger export earlier in this project). Optional - everything
+    // works without it, just with the close-only ATR approximation.
+    let twelvedata_rate_limit: usize = env_var("TWELVEDATA_RATE_LIMIT_PER_MIN", 8);
+    let twelvedata: Option<Arc<TwelveDataProvider>> = std::env::var("TWELVEDATA_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .map(|key| {
+            tracing::info!("Twelve Data backfill enabled (rate limit {twelvedata_rate_limit}/min) - POST /backfill/:symbol for real OHLC + ATR");
+            let limiter = Arc::new(RateLimiter::new(twelvedata_rate_limit, Duration::from_secs(60)));
+            Arc::new(TwelveDataProvider::new(key, limiter))
+        });
+    if twelvedata.is_none() {
+        tracing::info!("TWELVEDATA_API_KEY not set - ATR stays approximated from closes; /backfill unavailable");
+    }
+
+    let notifier = notifier::init();
 
     let ollama_base =
-        std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://localhost:11434".into());
-    let ollama_model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3.2:3b".into());
+        env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://localhost:11434".into());
+    let ollama_model = env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3.2:3b".into());
     let llm_concurrency: usize = env_var("LLM_CONCURRENCY", 2);
     tracing::info!(
         "using Ollama at {ollama_base} with model {ollama_model} (concurrency {llm_concurrency})"
@@ -128,7 +150,7 @@ async fn main() {
     );
     let theme_watcher = themes::ThemeWatcher::new(news, llm, llm_semaphore);
 
-    let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "stock-sentinel.db".into());
+    let db_path = env::var("DATABASE_PATH").unwrap_or_else(|_| "stock-sentinel.db".into());
     let db = Db::open(&db_path).expect("failed to open sqlite database");
 
     // Hydrate the in-memory cache from disk so positions survive a restart.
@@ -148,6 +170,24 @@ async fn main() {
         "portfolio circuit breaker: trips at {portfolio_drawdown_limit_pct:.1}% aggregate drawdown"
     );
 
+    // Strategy is now genuinely configurable via env, not hardcoded at
+    // every call site - tune it without a recompile.
+    let default_strategy = StrategyConfig {
+        trailing_stop_pct: env_var("TRAILING_STOP_PCT", 15.0),
+        take_profit_ladder: vec![(30.0, 0.25), (60.0, 0.25), (100.0, 0.25)],
+        rsi_overbought: env_var("RSI_OVERBOUGHT", 75.0),
+        rsi_period: env_var("RSI_PERIOD", 14),
+        atr_stop_multiplier: std::env::var("ATR_STOP_MULTIPLIER")
+            .ok()
+            .and_then(|v| v.parse().ok()),
+    };
+    tracing::info!(
+        "default strategy: trailing_stop={:.1}%, rsi_overbought={:.0}, atr_stop_multiplier={:?}",
+        default_strategy.trailing_stop_pct,
+        default_strategy.rsi_overbought,
+        default_strategy.atr_stop_multiplier
+    );
+
     let state = Arc::new(AppState {
         positions,
         provider,
@@ -156,8 +196,10 @@ async fn main() {
         extras,
         notifier,
         theme_watcher,
+        twelvedata,
         circuit_breaker: Arc::new(AtomicBool::new(false)),
         portfolio_drawdown_limit_pct,
+        default_strategy,
     });
 
     let scan_interval_secs: u64 = env_var("SCAN_INTERVAL_SECS", 15 * 60);
@@ -169,14 +211,23 @@ async fn main() {
     tracing::info!(
         "scanner: every {scan_interval_secs}s, up to {max_concurrent_scans} tickers in parallel"
     );
-    let scanner_handle = tokio::spawn(scanner::run_scanner_loop(Arc::clone(&state), scanner_cfg));
+
+    // Graceful scanner shutdown: a watch channel rather than abort(), so
+    // the scanner task gets to notice the shutdown signal and return
+    // cleanly (finishing whatever it was doing gets interrupted at the
+    // next `select!` point, but the task itself is properly joined
+    // rather than yanked out from under itself).
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let scanner_handle = tokio::spawn(scanner::run_scanner_loop(
+        Arc::clone(&state),
+        scanner_cfg,
+        shutdown_rx,
+    ));
 
     // Auth: bearer token if API_AUTH_TOKEN is set, otherwise wide open.
     // This is going on a public cloud box per the original ask, so an
     // unset token gets a loud, repeated warning rather than a quiet one.
-    let auth_token = std::env::var("API_AUTH_TOKEN")
-        .ok()
-        .filter(|t| !t.is_empty());
+    let auth_token = env::var("API_AUTH_TOKEN").ok().filter(|t| !t.is_empty());
     let auth_state: auth::AuthState = Arc::new(auth_token.clone());
     if auth_token.is_none() {
         tracing::warn!("========================================================");
@@ -192,9 +243,10 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(routes::health))
         .route(
-            "/positions",
+            "/position",
             get(routes::list_positions).post(routes::add_position),
         )
+        .route("/positions", post(routes::add_positions))
         .route("/positions/{symbol}", delete(routes::remove_position))
         .route("/positions/{symbol}/signal", get(routes::get_signal))
         .route(
@@ -211,6 +263,7 @@ async fn main() {
         .route("/fundamentals/{symbol}", get(routes::fundamentals))
         .route("/peers/{symbol}", get(routes::peers))
         .route("/history/{symbol}", get(routes::price_history))
+        .route("/backfill/{symbol}", post(routes::backfill))
         .route("/risk/position-size", post(routes::position_size))
         .route("/backtest/{symbol}", post(routes::run_backtest))
         .route(
@@ -230,7 +283,7 @@ async fn main() {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
+    let addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
     tracing::info!("listening on {addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app)
@@ -238,7 +291,12 @@ async fn main() {
         .await
         .unwrap();
 
-    scanner_handle.abort();
+    // Signal the scanner and wait for it to actually finish, instead of
+    // aborting it mid-cycle.
+    let _ = shutdown_tx.send(true);
+    if let Err(e) = scanner_handle.await {
+        tracing::warn!("scanner task did not shut down cleanly: {e:?}");
+    }
 }
 
 /// Waits for Ctrl+C or SIGTERM (the signal a cloud platform sends on

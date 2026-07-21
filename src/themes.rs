@@ -22,7 +22,11 @@ pub struct ThemeWatcher {
 }
 
 impl ThemeWatcher {
-    pub fn new(news: Arc<dyn NewsProvider>, llm: Arc<OllamaClient>, llm_semaphore: Arc<Semaphore>) -> Self {
+    pub fn new(
+        news: Arc<dyn NewsProvider>,
+        llm: Arc<OllamaClient>,
+        llm_semaphore: Arc<Semaphore>,
+    ) -> Self {
         Self {
             news,
             llm,

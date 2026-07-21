@@ -141,7 +141,7 @@
      color:var(--ink-faint); font-weight:500; padding:0 10px 8px 10px; border-bottom:1px solid var(--line);}
   td{padding:10px; border-bottom:1px solid var(--line-soft); font-family:var(--mono); color:var(--ink);}
   tbody tr:hover{background:var(--bg-hover);}
-  td.num{text-align:right; font-variant-numeric:tabular-nums;}
+  th.num, td.num{text-align:right; font-variant-numeric:tabular-nums;}
   .empty-note{color:var(--ink-faint); font-size:13px; padding:18px 4px; font-style:normal;}
 
   .chip{
@@ -221,21 +221,36 @@
     *{animation-duration:.001s !important; animation-iteration-count:1 !important; transition-duration:.001s !important;}
   }
 
+  .hamburger{
+    display:none; align-items:center; justify-content:center; width:34px; height:34px; flex:none;
+    background:var(--bg-inset); border:1px solid var(--line); border-radius:var(--radius-sm); color:var(--ink); cursor:pointer;
+  }
+  .rail-backdrop{
+    display:none; position:fixed; inset:0; background:rgba(6,8,11,.6); z-index:30;
+  }
+  .rail-backdrop.open{display:block;}
+  .rail-close{display:none;}
+
   @media(max-width:860px){
+    .hamburger{display:flex;}
     .rail{
-      position:fixed; bottom:0; left:0; right:0; top:auto; width:100%; height:auto; flex-direction:row;
-      border-right:none; border-top:1px solid var(--line); padding:6px 8px; overflow-x:auto; z-index:20;
+      position:fixed; top:0; left:0; bottom:auto; right:auto; height:100vh; width:min(80vw,290px);
+      transform:translateX(-100%); transition:transform .25s ease; z-index:40; box-shadow:0 0 40px rgba(0,0,0,.5);
     }
-    .brand,.rail-gap,.rail-foot{display:none;}
-    .rail-btn{flex-direction:column; gap:4px; font-size:10px; padding:8px 10px; flex:none;}
-    .main{padding-bottom:64px;}
+    .rail.open{transform:translateX(0);}
+    .rail-close{
+      display:flex; align-items:center; justify-content:center; width:28px; height:28px; margin-left:auto;
+      background:none; border:1px solid var(--line); border-radius:var(--radius-sm); color:var(--ink-dim); cursor:pointer;
+    }
+    .brand{padding-right:0;}
     .content{padding:18px;}
-    .topbar{padding:12px 18px;}
+    .topbar{padding:12px 16px;}
   }
 </style>
 </head>
 <body>
 
+<div class="rail-backdrop" id="rail-backdrop"></div>
 <div class="shell">
   <aside class="rail" id="rail">
     <div class="brand">
@@ -246,6 +261,9 @@
         <div class="brand-text">SENTINEL</div>
         <div class="brand-sub">Control Panel</div>
       </div>
+      <button class="rail-close" id="rail-close" aria-label="Close menu">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 5l14 14M19 5L5 19"/></svg>
+      </button>
     </div>
 
     <button class="rail-btn active" data-panel="overview">
@@ -288,6 +306,9 @@
 
   <div class="main">
     <header class="topbar">
+      <button class="hamburger" id="hamburger" aria-label="Open menu">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
       <span class="topbar-title" id="topbar-title">Overview</span>
       <div class="topbar-gap"></div>
       <span class="pill" id="breaker-pill" title="Portfolio circuit breaker">
@@ -707,8 +728,19 @@
     document.getElementById("topbar-title").textContent = titles[name];
     location.hash = name;
     loadPanel(name);
+    closeDrawer();
   }
   document.querySelectorAll(".rail-btn").forEach(btn => btn.addEventListener("click", () => showPanel(btn.dataset.panel)));
+
+  /* ---------------- mobile drawer ---------------- */
+  const railEl = document.getElementById("rail");
+  const backdropEl = document.getElementById("rail-backdrop");
+  function openDrawer() { railEl.classList.add("open"); backdropEl.classList.add("open"); }
+  function closeDrawer() { railEl.classList.remove("open"); backdropEl.classList.remove("open"); }
+  document.getElementById("hamburger").addEventListener("click", openDrawer);
+  document.getElementById("rail-close").addEventListener("click", closeDrawer);
+  backdropEl.addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
 
   function loadPanel(name) {
     if (!state.apiBase) { if (name !== "settings") toast("Set your API URL in Settings to load data.", "error"); return; }
@@ -1075,6 +1107,7 @@
     try {
       const url = state.apiBase.replace(/\/+$/, "") + "/health";
       const res = await fetch(url);
+      console.log(res, "äääääääääääääääääääää")
       if (res.ok) { setConn(true); statusEl.innerHTML = '<div class="banner" style="background:var(--teal-glow); border-color:rgba(79,191,159,.35); color:var(--teal);">Connected — /health responded OK.</div>'; }
       else { setConn(false); statusEl.innerHTML = `<div class="banner banner-danger">Server responded with ${res.status}.</div>`; }
     } catch {

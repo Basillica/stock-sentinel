@@ -1,4 +1,6 @@
+use crate::notifier::Notifier;
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use serde_json::json;
 
 pub struct TelegramNotifier {
@@ -19,8 +21,11 @@ impl TelegramNotifier {
             client,
         }
     }
+}
 
-    pub async fn send(&self, text: &str) -> Result<()> {
+#[async_trait]
+impl Notifier for TelegramNotifier {
+    async fn send(&self, text: &str) -> Result<()> {
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.token);
         let resp = self
             .client
@@ -40,26 +45,5 @@ impl TelegramNotifier {
             anyhow::bail!("Telegram API returned an error: {body}");
         }
         Ok(())
-    }
-}
-
-/// Formats a scanner verdict into a short, skimmable alert. Kept as a free
-/// function (not a method on Verdict) so telegram.rs stays the only place
-/// that knows about Telegram's formatting quirks.
-pub fn format_alert(symbol: &str, verdict: &crate::pipeline::Verdict) -> Option<String> {
-    use crate::pipeline::Verdict;
-    match verdict {
-        Verdict::SellAll { reason } => Some(format!("🔴 *{symbol}: SELL ALL*\n{reason}")),
-        Verdict::TrimProfit { fraction, reason } => Some(format!(
-            "🟡 *{symbol}: trim {:.0}%*\n{reason}",
-            fraction * 100.0
-        )),
-        Verdict::Watch { confidence } => Some(format!(
-            "🟠 *{symbol}: news risk flag* (confidence {confidence:.2}) - worth a look."
-        )),
-        Verdict::Buy { confidence } => Some(format!(
-            "🟢 *{symbol}: candidate BUY signal* (confidence {confidence:.2})"
-        )),
-        Verdict::Hold | Verdict::Avoid { .. } => None, // routine outcomes, don't spam
     }
 }

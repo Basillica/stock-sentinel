@@ -5,6 +5,11 @@ use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub mod alphavantage;
+pub mod digest;
+pub mod fetcher;
+pub mod twelvedata;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Quote {
     pub price: f64,

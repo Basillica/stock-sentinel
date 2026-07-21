@@ -21,3 +21,6 @@ async-trait = "0.1"
 dashmap = "6"
 tower-http = { version = "0.7", features = ["cors", "trace"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
+uuid = { version = "1.24", features = ["v4"] }
+ta = { version = "0.5", features = ["serde"] }
+scraper = "0.27"
